@@ -37,7 +37,7 @@ class User(AbstractUser):
     fullname = models.CharField(_("نام, نام خانوادگی"),max_length=255,blank=True, null=True)
     phone = PhoneNumberField(_("شماره تلفن "),unique=True)
     image = models.ImageField(_("عکس پروفایل"),upload_to=path_image_or_file, blank=True, null=True)
-    national_code = models.PositiveSmallIntegerField(_("کدملی"),validators=[(MaxLengthValidator(10))],blank=True, null=True)
+    national_code = models.CharField(_("کدملی"),validators=[(MaxLengthValidator(10))],blank=True, null=True, max_length=10)
     city = models.CharField(_("شهر"),max_length=255,blank=True, null=True)
 
     objects= CustomUserManager()
@@ -50,20 +50,15 @@ class User(AbstractUser):
         return str(self.phone)
     
     def save(self,*args, **kwargs):
-        if self.pk:
-            old_instance = self.__class__.objects.filter(pk=self.pk).first()
-            if (
-                old_instance 
-                and old_instance.image 
-                and old_instance.image.name
-                and old_instance.image != self.image
-            ):
-                old_instance.avatar.delete(save=False)
+        if self.pk and self.image:
+            old_instance = self.__class__.objects.filter(pk=self.pk).only('image').first()
+            if old_instance and old_instance.image and old_instance.image != self.image:
+                old_instance.image.delete(save=False)
         super().save(*args, **kwargs)
 
     def delete(self,*args, **kwargs):
-        if self.avatar:
-            self.avatar.delete(save=False)
+        if self.image:
+            self.image.delete(save=False)
 
         super().delete(*args, **kwargs)
 
