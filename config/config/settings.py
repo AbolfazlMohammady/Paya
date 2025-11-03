@@ -27,6 +27,7 @@ INSTALLED_APPS = [
     # 'uvicorn',
     "rest_framework",
     "rest_framework_simplejwt",
+    'rest_framework_simplejwt.token_blacklist',
     "drf_spectacular",
     "drf_spectacular_sidecar",
     'debug_toolbar',
@@ -167,6 +168,7 @@ SIMPLE_JWT = {
     "BLACKLIST_AFTER_ROTATION": True,
     "SIGNING_KEY": SECRET_KEY, 
     "AUTH_HEADER_TYPES": ("Bearer",),
+    'ROTATING_REFRESH_TOKENS': True,  
 }
 
 # Config User
