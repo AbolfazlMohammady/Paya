@@ -1,0 +1,136 @@
+services:
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: paya_postgres
+    restart: always
+    environment:
+      POSTGRES_DB: paya_user
+      POSTGRES_USER: paya_user
+      POSTGRES_PASSWORD: supersecretpassword
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - default
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U marian_user"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  pgadmin:
+    image: dpage/pgadmin4
+    container_name: paya_pgadmin
+    restart: always
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@admin.com
+      PGADMIN_DEFAULT_PASSWORD: admin
+    ports:
+      - "5050:80"
+    depends_on:
+      - postgres
+    networks:
+      - default
+
+  redis:
+    image: redis:7.2-alpine
+    container_name: paya_redis
+    restart: always
+    ports:
+      - "6379:6379"
+    networks:
+      - default
+
+  django:
+    container_name: django
+    build:
+      context: ./config
+      dockerfile: Dockerfile
+    volumes:
+      - ./config:/app  
+    ports:
+      - "8000:8000"
+    env_file:
+      - ./config/.env
+    depends_on:
+      - redis
+      - postgres
+    networks:
+      - default
+    entrypoint: ["/app/entrypoint.sh"]
+    command: ["gunicorn", "config.wsgi:application", "-b", "0.0.0.0:8000", "--workers", "3"]
+
+  # fastapi:
+  #   container_name: fastapi
+  #   build:
+  #     context: ./config/Api/
+  #   volumes:
+  #     - ./config:/app
+  #   ports:
+  #     - "8001:8001"
+  #   env_file:
+  #     - ./config/.env
+  #   environment:
+  #     - REDIS_URL=redis://redis:6379/0
+  #     - DJANGO_SETTINGS_MODULE=config.settings
+  #     - RESEND_API_KEY=${RESEND_API_KEY:-}
+  #   depends_on:
+  #     - redis
+  #     - postgres
+  #   networks:
+  #     - default
+  #   entrypoint: ["uvicorn", "Api.main:app", "--host", "0.0.0.0", "--port", "8001"]
+
+  celery:
+    container_name: celery
+    build:
+      context: ./config   
+    environment:
+      - PYTHONPATH=/app
+      - DJANGO_SETTINGS_MODULE=config.settings
+    entrypoint: ["/bin/sh", "-c", "export PYTHONPATH=/app DJANGO_SETTINGS_MODULE=config.settings && python -m celery -A config.celery_config worker -l INFO -Q tasks -c 8"]
+    volumes:
+      - ./config:/app
+    env_file:
+      - ./config/.env
+    depends_on:
+      - redis
+      - django
+      - postgres
+    networks:
+      - default
+
+  # nginx:
+  #   container_name: nginx
+  #   build:
+  #     context: .
+  #     dockerfile: nginx/Dockerfile
+  #   ports:
+  #     - "80:80"
+  #     - "443:443"
+  #   volumes:
+  #     - /etc/letsencrypt:/etc/letsencrypt:ro  
+  #     - ./config/data/static:/app/config/data/static
+  #     - ./config/data/media:/app/config/data/media
+  #   depends_on:
+  #     - django
+  #     - fastapi
+  #   networks:
+  #     - default
+
+  # frontend:
+  #   container_name: frontend
+  #   build:
+  #     context: ../marine-project
+  #     dockerfile: Dockerfile
+  #   restart: always
+  #   ports:
+  #     - "3000:3000"
+  #   environment:
+  #     - NODE_ENV=production
+  #   networks:
+  #     - default
+
+
+volumes:
+  postgres_data:
