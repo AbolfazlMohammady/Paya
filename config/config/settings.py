@@ -38,6 +38,7 @@ INSTALLED_APPS = [
     
     # My app
     'users.core.apps.CoreConfig',
+    'wallet.apps.WalletConfig',
 
 ]
 
@@ -265,3 +266,11 @@ RESEND_API_KEY=os.environ.get('RESEND_API_KEY', 're_dUAfRuPj_KP9q36Sa2x9UGNXp263
 
 # Chat bot
 MAMMOUTH_API_KEY = os.getenv('MAMMOUTH_API_KEY')
+
+# Payment Gateway Settings
+# برای تست: می‌توانید از Merchant ID تست استفاده کنید
+# برای دریافت Merchant ID: https://next.zarinpal.com/
+# در حالت Sandbox، پرداخت‌ها واقعی نیستند و فقط برای تست هستند
+ZARINPAL_MERCHANT_ID = os.environ.get('ZARINPAL_MERCHANT_ID', '')
+ZARINPAL_SANDBOX = os.environ.get('ZARINPAL_SANDBOX', 'True') == 'True'  # برای تست True باشد
+BASE_URL = os.environ.get('BASE_URL', 'http://localhost:8000')

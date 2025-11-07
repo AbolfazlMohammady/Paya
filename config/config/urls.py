@@ -18,6 +18,7 @@ urlpatterns = [
     # My app
 
     path('api/core/', include('users.core.urls')),
+    path('api/wallet/', include('wallet.urls')),
 
 ]
 if settings.DEBUG:
