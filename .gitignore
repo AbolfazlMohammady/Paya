@@ -10,6 +10,12 @@ db.sqlite3
 __pycache__/
 *.pyc
 data
+taxi
+anwer
+Transaction-manage-panel
+Part-3.pdf
+Part-2.docx
+Part-1.docx
 # Distribution / packaging
 __pycache__
 .Python
