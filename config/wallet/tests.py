@@ -10,12 +10,11 @@ User = get_user_model()
 class WalletModelTest(TestCase):
     def setUp(self):
         self.user = User.objects.create_user(phone='09123456789', password='testpass123')
-        self.wallet = Wallet.objects.create(
-            user=self.user,
-            balance=Decimal('100000'),
-            currency='IRR',
-            status='active'
-        )
+        self.wallet = self.user.wallet
+        self.wallet.balance = Decimal('100000')
+        self.wallet.currency = 'IRR'
+        self.wallet.status = 'active'
+        self.wallet.save(update_fields=['balance', 'currency', 'status', 'updated_at'])
     
     def test_wallet_creation(self):
         self.assertEqual(self.wallet.user, self.user)
@@ -35,11 +34,10 @@ class WalletModelTest(TestCase):
 class TransactionModelTest(TestCase):
     def setUp(self):
         self.user = User.objects.create_user(phone='09123456789', password='testpass123')
-        self.wallet = Wallet.objects.create(
-            user=self.user,
-            balance=Decimal('100000'),
-            currency='IRR'
-        )
+        self.wallet = self.user.wallet
+        self.wallet.balance = Decimal('100000')
+        self.wallet.currency = 'IRR'
+        self.wallet.save(update_fields=['balance', 'currency', 'updated_at'])
     
     def test_transaction_creation(self):
         transaction = Transaction.objects.create(
@@ -60,18 +58,16 @@ class WalletUtilsTest(TestCase):
     def setUp(self):
         self.user1 = User.objects.create_user(phone='09123456789', password='testpass123')
         self.user2 = User.objects.create_user(phone='09123456780', password='testpass123')
-        self.wallet1 = Wallet.objects.create(
-            user=self.user1,
-            balance=Decimal('100000'),
-            currency='IRR',
-            status='active'
-        )
-        self.wallet2 = Wallet.objects.create(
-            user=self.user2,
-            balance=Decimal('50000'),
-            currency='IRR',
-            status='active'
-        )
+        self.wallet1 = self.user1.wallet
+        self.wallet2 = self.user2.wallet
+        self.wallet1.balance = Decimal('100000')
+        self.wallet1.currency = 'IRR'
+        self.wallet1.status = 'active'
+        self.wallet1.save(update_fields=['balance', 'currency', 'status', 'updated_at'])
+        self.wallet2.balance = Decimal('50000')
+        self.wallet2.currency = 'IRR'
+        self.wallet2.status = 'active'
+        self.wallet2.save(update_fields=['balance', 'currency', 'status', 'updated_at'])
     
     def test_charge_wallet(self):
         transaction = charge_wallet(
@@ -108,7 +104,9 @@ class WalletUtilsTest(TestCase):
             sender_wallet=self.wallet1,
             recipient_wallet=self.wallet2,
             amount=Decimal('30000'),
-            description='Test transfer'
+            description='Test transfer',
+            method='phone',
+            metadata={'note': 'friends'}
         )
         self.wallet1.refresh_from_db()
         self.wallet2.refresh_from_db()
@@ -116,4 +114,21 @@ class WalletUtilsTest(TestCase):
         self.assertEqual(self.wallet2.balance, Decimal('80000'))
         self.assertEqual(sender_transaction.type, 'transfer_out')
         self.assertEqual(recipient_transaction.type, 'transfer_in')
+        self.assertEqual(sender_transaction.transfer_method, 'phone')
+        self.assertEqual(recipient_transaction.transfer_method, 'phone')
+        self.assertEqual(sender_transaction.metadata.get('direction'), 'outgoing')
+        self.assertEqual(recipient_transaction.metadata.get('direction'), 'incoming')
+        self.assertEqual(sender_transaction.metadata.get('note'), 'friends')
+        self.assertEqual(recipient_transaction.metadata.get('note'), 'friends')
+
+
+class WalletSignalTest(TestCase):
+    def test_wallet_created_on_user_creation(self):
+        phone = '09120001111'
+        user = User.objects.create_user(phone=phone, password='testpass123')
+        self.assertTrue(hasattr(user, 'wallet'))
+        self.assertEqual(user.wallet.balance, Decimal('0'))
+        self.assertEqual(user.wallet.currency, 'IRR')
+        self.assertEqual(user.wallet.status, 'active')
+
 

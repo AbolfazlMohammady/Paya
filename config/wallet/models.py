@@ -72,6 +72,16 @@ class Transaction(models.Model):
         ('transfer_out', 'ارسال انتقال'),
         ('refund', 'بازگشت وجه'),
     ]
+
+    TRANSFER_METHOD_CHOICES = [
+        ('phone', 'انتقال با شماره موبایل'),
+        ('contact', 'انتقال به مخاطب ذخیره‌شده'),
+        ('wallet', 'انتقال به کیف پول انتخابی'),
+        ('qr', 'انتقال با QR Code'),
+        ('iban', 'انتقال با شماره شبا'),
+        ('card', 'انتقال با شماره کارت'),
+        ('link', 'انتقال با لینک پرداخت'),
+    ]
     
     STATUS_CHOICES = [
         ('pending', 'در انتظار'),
@@ -95,6 +105,13 @@ class Transaction(models.Model):
         max_length=20, 
         choices=TYPE_CHOICES,
         verbose_name=_('نوع تراکنش')
+    )
+    transfer_method = models.CharField(
+        max_length=30,
+        choices=TRANSFER_METHOD_CHOICES,
+        blank=True,
+        null=True,
+        verbose_name=_('روش انتقال')
     )
     amount = models.DecimalField(
         max_digits=15, 
@@ -157,6 +174,11 @@ class Transaction(models.Model):
         related_name='received_transactions',
         verbose_name=_('کیف پول دریافت‌کننده')
     )
+    metadata = models.JSONField(
+        default=dict,
+        blank=True,
+        verbose_name=_('اطلاعات اضافی')
+    )
     created_at = models.DateTimeField(auto_now_add=True, verbose_name=_('تاریخ ایجاد'))
     updated_at = models.DateTimeField(auto_now=True, verbose_name=_('تاریخ به‌روزرسانی'))
     
@@ -170,11 +192,13 @@ class Transaction(models.Model):
             models.Index(fields=['transaction_id']),
             models.Index(fields=['status']),
             models.Index(fields=['type']),
+            models.Index(fields=['transfer_method']),
             models.Index(fields=['created_at']),
         ]
     
     def __str__(self):
-        return f"{self.transaction_id} - {self.type} - {self.amount}"
+        method = f" ({self.transfer_method})" if self.transfer_method else ""
+        return f"{self.transaction_id} - {self.type}{method} - {self.amount}"
     
     @classmethod
     def generate_transaction_id(cls):
@@ -240,7 +264,7 @@ class PaymentRequest(models.Model):
         verbose_name=_('مبلغ')
     )
     description = models.TextField(blank=True, verbose_name=_('توضیحات'))
-    gateway = models.CharField(max_length=50, default='zarinpal', verbose_name=_('درگاه'))
+    gateway = models.CharField(max_length=50, default='sepehr', verbose_name=_('درگاه'))
     authority = models.CharField(max_length=100, blank=True, null=True, verbose_name=_('Authority'))
     ref_id = models.CharField(max_length=100, blank=True, null=True, verbose_name=_('Ref ID'))
     status = models.CharField(
@@ -258,6 +282,7 @@ class PaymentRequest(models.Model):
         verbose_name=_('تراکنش')
     )
     callback_url = models.URLField(blank=True, null=True, verbose_name=_('آدرس بازگشت'))
+    metadata = models.JSONField(default=dict, blank=True, verbose_name=_('اطلاعات اضافی'))
     created_at = models.DateTimeField(auto_now_add=True, verbose_name=_('تاریخ ایجاد'))
     updated_at = models.DateTimeField(auto_now=True, verbose_name=_('تاریخ به‌روزرسانی'))
     

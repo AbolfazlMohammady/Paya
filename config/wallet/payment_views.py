@@ -4,7 +4,6 @@ Viewهای مربوط به callback پرداخت
 from rest_framework import status, views
 from rest_framework.response import Response
 from django.db import transaction as db_transaction
-from django.utils import timezone
 
 from .models import PaymentRequest, Wallet
 from .payment_gateway import PaymentGatewayService
@@ -23,46 +22,84 @@ class PaymentCallbackView(views.APIView):
         دریافت callback از درگاه پرداخت
         POST /api/wallet/payment-callback/
         """
-        # دریافت authority از درخواست
-        authority = request.data.get('Authority') or request.query_params.get('Authority')
-        status_code = request.data.get('Status') or request.query_params.get('Status')
+        # دریافت داده‌ها از درخواست
+        data = request.query_params.dict()
+        if hasattr(request.data, 'dict'):
+            data.update(request.data.dict())
+        else:
+            data.update(request.data)
+        authority = data.get('Authority') or data.get('authority')
+        invoice_id = data.get('invoiceid') or data.get('InvoiceID') or data.get('InvoiceId') or data.get('request_id')
         
-        if not authority:
-            return Response(
-                {'detail': 'Authority is required'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+        payment_request = None
         
-        # یافتن درخواست پرداخت
-        try:
-            payment_request = PaymentRequest.objects.get(
+        if authority:
+            payment_request = PaymentRequest.objects.filter(
                 authority=authority,
                 status='pending'
-            )
-        except PaymentRequest.DoesNotExist:
+            ).first()
+        
+        if payment_request is None and invoice_id:
+            payment_request = PaymentRequest.objects.filter(
+                request_id=str(invoice_id),
+                status='pending'
+            ).first()
+        
+        if payment_request is None:
             return Response(
                 {'detail': 'Payment request not found'},
                 status=status.HTTP_404_NOT_FOUND
             )
         
-        # بررسی وضعیت از درگاه
-        if status_code != 'OK':
+        resp_code = data.get('respcode') or data.get('RespCode') or data.get('status') or data.get('Status')
+        if str(resp_code) not in {'0', '00', '000', 'ok', 'OK'}:
             payment_request.status = 'failed'
-            payment_request.save()
+            payment_request.metadata = {
+                **(payment_request.metadata or {}),
+                'callback_payload': data
+            }
+            payment_request.save(update_fields=['status', 'metadata', 'updated_at'])
             return Response(
                 {'detail': 'Payment was cancelled or failed'},
                 status=status.HTTP_400_BAD_REQUEST
             )
         
         # تایید پرداخت از درگاه
+        verification_metadata = {}
+        digital_receipt = data.get('digitalreceipt') or data.get('DigitalReceipt')
+        if not digital_receipt:
+            payment_request.status = 'failed'
+            payment_request.metadata = {
+                **(payment_request.metadata or {}),
+                'callback_payload': data,
+                'error': 'digital_receipt missing'
+            }
+            payment_request.save(update_fields=['status', 'metadata', 'updated_at'])
+            return Response(
+                {'detail': 'digital receipt is required for verification'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        payment_extra = (payment_request.metadata or {}).get('gateway_extra', {})
+        verification_metadata = {
+            'digital_receipt': digital_receipt,
+            'terminal_id': payment_extra.get('terminal_id'),
+            'invoice_id': invoice_id or payment_extra.get('invoice_id'),
+        }
+        authority_for_verify = payment_request.authority or digital_receipt
+
         verify_result = PaymentGatewayService.verify_payment(
-            authority=authority,
-            amount=payment_request.amount
+            authority=authority_for_verify,
+            amount=payment_request.amount,
+            metadata=verification_metadata
         )
         
         if not verify_result.get('success'):
             payment_request.status = 'failed'
-            payment_request.save()
+            updated_metadata = payment_request.metadata or {}
+            updated_metadata.setdefault('callback_payload', data)
+            updated_metadata['verification_error'] = verify_result.get('error')
+            payment_request.metadata = updated_metadata
+            payment_request.save(update_fields=['status', 'metadata', 'updated_at'])
             return Response(
                 {'detail': verify_result.get('error', 'Payment verification failed')},
                 status=status.HTTP_400_BAD_REQUEST
@@ -84,7 +121,12 @@ class PaymentCallbackView(views.APIView):
                 payment_request.status = 'completed'
                 payment_request.ref_id = verify_result.get('ref_id')
                 payment_request.transaction = transaction
-                payment_request.save()
+                updated_metadata = payment_request.metadata or {}
+                updated_metadata.setdefault('callback_payload', data)
+                if verify_result.get('extra'):
+                    updated_metadata['verification_extra'] = verify_result['extra']
+                payment_request.metadata = updated_metadata
+                payment_request.save(update_fields=['status', 'ref_id', 'transaction', 'metadata', 'updated_at'])
             
             return Response({
                 'status': 'success',
@@ -97,7 +139,11 @@ class PaymentCallbackView(views.APIView):
             
         except Exception as e:
             payment_request.status = 'failed'
-            payment_request.save()
+            updated_metadata = payment_request.metadata or {}
+            updated_metadata.setdefault('callback_payload', data)
+            updated_metadata['internal_error'] = str(e)
+            payment_request.metadata = updated_metadata
+            payment_request.save(update_fields=['status', 'metadata', 'updated_at'])
             return Response(
                 {'detail': f'Error charging wallet: {str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR

@@ -6,7 +6,10 @@ __pycache__/
 # data
 db.sqlite3
 # C extensions
+kashf
 *.so
+./figma/wallet
+figma/wallet
 __pycache__/
 *.pyc
 data

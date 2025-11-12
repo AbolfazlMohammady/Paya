@@ -156,7 +156,7 @@ def debit_wallet(wallet, amount, description='', reference_id=None):
 
 
 @db_transaction.atomic
-def transfer_money(sender_wallet, recipient_wallet, amount, description=''):
+def transfer_money(sender_wallet, recipient_wallet, amount, description='', method=None, metadata=None):
     """
     انتقال وجه بین دو کیف پول
     """
@@ -194,6 +194,17 @@ def transfer_money(sender_wallet, recipient_wallet, amount, description=''):
         recipient_balance_before = recipient_wallet.balance
         recipient_balance_after = recipient_balance_before + amount
         
+        transfer_metadata = metadata.copy() if metadata else {}
+        sender_metadata = transfer_metadata.copy()
+        sender_metadata.setdefault('direction', 'outgoing')
+        sender_metadata.setdefault('recipient_wallet_id', recipient_wallet.id)
+        sender_metadata.setdefault('recipient_user_id', recipient_wallet.user_id)
+
+        recipient_metadata = transfer_metadata.copy()
+        recipient_metadata.setdefault('direction', 'incoming')
+        recipient_metadata.setdefault('sender_wallet_id', sender_wallet.id)
+        recipient_metadata.setdefault('sender_user_id', sender_wallet.user_id)
+
         # ایجاد تراکنش فرستنده
         sender_transaction = Transaction.objects.create(
             transaction_id=Transaction.generate_transaction_id(),
@@ -204,7 +215,9 @@ def transfer_money(sender_wallet, recipient_wallet, amount, description=''):
             balance_after=sender_balance_after,
             description=description or 'انتقال وجه',
             status='completed',
-            recipient_wallet=recipient_wallet
+            recipient_wallet=recipient_wallet,
+            transfer_method=method,
+            metadata=sender_metadata
         )
         
         # ایجاد تراکنش دریافت‌کننده
@@ -217,7 +230,9 @@ def transfer_money(sender_wallet, recipient_wallet, amount, description=''):
             balance_after=recipient_balance_after,
             description=description or 'دریافت انتقال وجه',
             status='completed',
-            related_transaction=sender_transaction
+            related_transaction=sender_transaction,
+            transfer_method=method,
+            metadata=recipient_metadata
         )
         
         # لینک کردن تراکنش‌ها

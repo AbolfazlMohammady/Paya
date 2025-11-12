@@ -6,3 +6,4 @@ class WalletConfig(AppConfig):
     name = 'wallet'
     verbose_name = 'Wallet Service'
 
+

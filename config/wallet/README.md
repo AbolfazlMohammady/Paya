@@ -1,163 +1,175 @@
-# راهنمای شارژ کیف پول از طریق درگاه پرداخت
+# راهنمای سرویس کیف پول و درگاه پرداخت
 
-## تنظیمات اولیه
+این سند نحوه پیکربندی و استفاده از سرویس کیف پول را با درگاه «پرداخت الکترونیک سپهر (صادرات)» توضیح می‌دهد. علاوه بر شارژ، هفت روش انتقال وجه داخلی که در طراحی UI آمده‌اند نیز در این نسخه پشتیبانی می‌شوند.
 
-### 1. تنظیم Merchant ID زرین‌پال
+---
 
-در فایل `config/settings.py` اضافه کنید:
+## ۱. تنظیمات محیط
 
-```python
-# تنظیمات درگاه پرداخت زرین‌پال
-ZARINPAL_MERCHANT_ID = 'your-merchant-id-here'
-ZARINPAL_SANDBOX = True  # برای تست از True استفاده کنید
-BASE_URL = 'http://localhost:8000'  # یا آدرس سرور شما
+در فایل `.env` یا متغیرهای محیطی موارد زیر را مقداردهی کنید:
+
+```env
+# آدرس پایه سیستم (برای callback)
+BASE_URL=http://localhost:8000
+
+# درگاه پرداخت سپهر
+PAYMENT_GATEWAY_DEFAULT=sepehr
+
+# تنظیمات درگاه سپهر
+SEPEHR_ENABLED=True
+SEPEHR_TERMINAL_ID=YOUR_TERMINAL_ID
+SEPEHR_TOKEN_URL=https://sepehr.shaparak.ir/Rest/V1/PeymentApi/GetToken
+SEPEHR_PAYMENT_URL=https://sepehr.shaparak.ir/Payment/Pay
+SEPEHR_ADVICE_URL=https://sepehr.shaparak.ir/Rest/V1/PeymentApi/Advice
+SEPEHR_ROLLBACK_URL=https://sepehr.shaparak.ir/Rest/V1/PeymentApi/Rollback
+SEPEHR_TIMEOUT=10
+SEPEHR_DEFAULT_PAYLOAD=
 ```
 
-### 2. نصب کتابخانه requests
+---
 
-اگر نصب نیست:
-```bash
-pip install requests
-```
+## ۲. جریان شارژ با درگاه سپهر
 
-### 3. اجرای Migrations
+### ۲.۱ درخواست توکن
+Endpoint: `POST /api/wallet/charge-gateway/`
 
-```bash
-python manage.py migrate wallet
-```
-
-## نحوه استفاده
-
-### مرحله 1: درخواست شارژ از درگاه
-
-**Endpoint**: `POST /api/wallet/charge-gateway/`
-
-**Headers**:
-```
-Authorization: Bearer <access_token>
-```
-
-**Request Body**:
 ```json
 {
   "amount": 100000,
   "description": "شارژ کیف پول",
-  "gateway": "zarinpal",
-  "callback_url": "https://yourapp.com/payment/callback"  // اختیاری
+  "callback_url": "https://example.com/payment/callback"
 }
 ```
 
-**Response (201 Created)**:
+پاسخ موفق:
 ```json
 {
-  "request_id": "req_abc123def456",
-  "payment_url": "https://sandbox.zarinpal.com/pg/StartPay/Authority123",
-  "authority": "A00000000000000000000000000000000000",
+  "request_id": "req_abcd1234",
+  "payment_url": "https://sepehr.shaparak.ir/Payment/Pay?token=...&terminalId=...",
+  "authority": "AccessTokenFromSepehr",
   "amount": 100000,
-  "gateway": "zarinpal",
-  "expires_at": "2024-01-15T13:00:00Z"
+  "gateway": "sepehr",
+  "expires_at": "2025-01-01T12:30:00Z"
 }
 ```
 
-### مرحله 2: هدایت کاربر به درگاه
+### ۲.۲ هدایت کاربر به صفحه پرداخت
+کاربر را به `payment_url` هدایت کنید (GET). صفحه سپهر باز می‌شود.
 
-کاربر را به `payment_url` هدایت کنید تا پرداخت را انجام دهد.
+### ۲.۳ دریافت Callback
+`POST /api/wallet/payment-callback/`
 
-### مرحله 3: Callback از درگاه
+در حالت سپهر، بدنه‌ی callback شامل `respcode`, `invoiceid`, `digitalreceipt` و ... است. سرویس:
+- صحت respcode را بررسی می‌کند.
+- سرویس Advice سپهر را با `digitalreceipt` صدا می‌زند.
+- در صورت موفقیت، کیف پول را شارژ کرده و پاسخ موفق می‌دهد.
 
-بعد از پرداخت، درگاه کاربر را به `callback_url` هدایت می‌کند.
+### ۲.۴ بررسی وضعیت
+`GET /api/wallet/payment-status/{request_id}/`
 
-**Endpoint**: `POST /api/wallet/payment-callback/`
-
-این endpoint به صورت خودکار:
-- پرداخت را verify می‌کند
-- کیف پول را شارژ می‌کند
-- تراکنش را ثبت می‌کند
-
-### مرحله 4: بررسی وضعیت پرداخت
-
-**Endpoint**: `GET /api/wallet/payment-status/{request_id}/`
-
-**Headers**:
-```
-Authorization: Bearer <access_token>
-```
-
-**Response (200 OK)**:
+پاسخ نمونه:
 ```json
 {
-  "request_id": "req_abc123def456",
+  "request_id": "req_abcd1234",
   "amount": 100000,
   "status": "completed",
-  "gateway": "zarinpal",
-  "authority": "A00000000000000000000000000000000000",
-  "ref_id": "123456789",
-  "transaction_id": "txn_abc123",
-  "balance_after": 100000,
-  "created_at": "2024-01-15T12:30:00Z",
-  "updated_at": "2024-01-15T12:32:00Z"
+  "gateway": "sepehr",
+  "authority": "AccessTokenFromSepehr",
+  "ref_id": "SepehrDigitalReceipt",
+  "transaction_id": "txn_a1b2c3",
+  "balance_after": 150000,
+  "created_at": "...",
+  "updated_at": "..."
 }
 ```
 
-## مثال کامل (Frontend)
+---
 
-```javascript
-// 1. درخواست شارژ
-const response = await fetch('/api/wallet/charge-gateway/', {
-  method: 'POST',
-  headers: {
-    'Authorization': `Bearer ${token}`,
-    'Content-Type': 'application/json'
-  },
-  body: JSON.stringify({
-    amount: 100000,
-    description: 'شارژ کیف پول'
-  })
-});
+## ۳. هفت روش انتقال وجه (طبق طراحی)
 
-const data = await response.json();
+Endpoint مشترک: `POST /api/wallet/transfer/`
 
-// 2. هدایت کاربر به درگاه
-if (data.payment_url) {
-  window.location.href = data.payment_url;
-}
+| مقدار `method` | توضیح | کلیدهای ورودی مهم |
+| --- | --- | --- |
+| `phone` | انتقال به شماره موبایل آزاد | `recipient_phone` |
+| `contact` | انتقال به مخاطب ذخیره‌شده | `recipient_phone` و متادیتای مخاطب |
+| `wallet` | انتقال به شناسه کیف پول منتخب | `recipient_wallet_id` |
+| `qr` | انتقال با اسکن QR | `metadata.qr_payload` |
+| `iban` | انتقال به شماره شبا | `metadata.iban` |
+| `card` | انتقال به شماره کارت | `metadata.card_number` |
+| `link` | انتقال از طریق لینک پرداخت داخلی | `metadata.payment_link_id` |
 
-// 3. بعد از بازگشت از درگاه، بررسی وضعیت
-const statusResponse = await fetch(`/api/wallet/payment-status/${data.request_id}/`, {
-  headers: {
-    'Authorization': `Bearer ${token}`
+### نمونه درخواست (انتقال با شماره موبایل)
+```json
+{
+  "method": "phone",
+  "recipient_phone": "+989121234567",
+  "amount": 250000,
+  "description": "بازپرداخت قرض",
+  "metadata": {
+    "note": "حواله فوری"
   }
-});
-
-const statusData = await statusResponse.json();
-console.log('Payment status:', statusData.status);
+}
 ```
 
-## تست با زرین‌پال Sandbox
+### نمونه درخواست (انتقال به کیف پول انتخابی)
+```json
+{
+  "method": "wallet",
+  "recipient_wallet_id": 42,
+  "amount": 500000,
+  "description": "تسویه کیف پول"
+}
+```
 
-برای تست، از Merchant ID تست استفاده کنید:
-- Merchant ID تست: `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`
-- در حالت Sandbox، پرداخت‌ها واقعی نیستند
+### پاسخ موفق
+```json
+{
+  "transaction_id": "txn_123abc",
+  "amount": 250000,
+  "recipient": {
+    "phone": "09121234567",
+    "fullname": "کاربر دریافت‌کننده"
+  },
+  "balance_after": 1250000,
+  "status": "completed",
+  "created_at": "2025-01-01T10:45:12Z",
+  "method": "phone",
+  "metadata": {
+    "direction": "outgoing",
+    "recipient_wallet_id": 42,
+    "note": "حواله فوری"
+  }
+}
+```
 
-## نکات مهم
+> برای همه روش‌ها فیلد `description` اختیاری است و در صورت ارسال، داخل تراکنش ذخیره می‌شود.
 
-1. **Callback URL**: باید یک URL عمومی باشد که درگاه بتواند به آن دسترسی داشته باشد
-2. **HTTPS**: در production حتماً از HTTPS استفاده کنید
-3. **Error Handling**: همیشه خطاها را handle کنید
-4. **Idempotency**: درخواست‌های تکراری را handle کنید
-5. **Timeout**: درخواست‌های پرداخت بعد از 30 دقیقه منقضی می‌شوند
+---
 
-## عیب‌یابی
+## ۴. ساخت خودکار کیف پول
 
-### مشکل: "ZARINPAL_MERCHANT_ID is not configured"
-**راه حل**: Merchant ID را در settings.py تنظیم کنید
+از این نسخه به بعد، به محض ایجاد کاربر جدید (ثبت‌نام / import)، با سیگنال `post_save` یک کیف پول با وضعیت `active` و موجودی صفر ساخته می‌شود. لذا در لایه اپلیکیشن فقط کافی است کاربر ایجاد شود؛ نیازی به API جداگانه نیست مگر برای تغییر ارز یا وضعیت.
 
-### مشکل: "Payment verification failed"
-**راه حل**: 
-- بررسی کنید که authority درست است
-- بررسی کنید که مبلغ پرداخت شده با مبلغ درخواستی یکسان است
-- در حالت Sandbox، از Merchant ID تست استفاده کنید
+---
 
-### مشکل: "Wallet is not active"
-**راه حل**: کیف پول باید در وضعیت 'active' باشد
+## ۵. نکات عیب‌یابی
 
+- **respcode != 0 (سپهر)**: تراکنش از سمت درگاه لغو شده است. اطلاعات callback در فیلد `metadata` ذخیره می‌شود.
+- **عدم وجود digitalreceipt**: بررسی کنید callback را با متد POST دریافت می‌کنید. می‌توانید برای تست لوکال داده‌های درگاه را شبیه‌سازی کرده و این فیلد را به صورت دستی ارسال کنید.
+- **Selected gateway is currently disabled**: اطمینان حاصل کنید `ENABLED=True` و مقادیر مرچنت/ترمینال تنظیم شده‌اند.
+- **Wallet already exists**: از آنجا که کیف پول خودکار ساخته می‌شود، در تست‌ها و seedها به جای `Wallet.objects.create` از `user.wallet` استفاده کنید.
+
+---
+
+## ۶. چک‌لیست نهایی قبل از تحویل
+
+- [ ] `PAYMENT_GATEWAY_DEFAULT` و مقادیر مرچنت در `.env` تنظیم شده است.
+- [ ] کاربر جدید → کیف پول فعال به صورت خودکار ساخته می‌شود.
+- [ ] شارژ از طریق درگاه سپهر با مسیر Token → Pay → Callback → Advice موفق است.
+- [ ] انتقال وجه برای هر هفت روش، با متادیتای مرتبط تست شده است.
+- [ ] مستندات فرانت و QA به‌روز شده‌اند (لیست متدها و فیلدهای لازم).
+
+---
+
+در صورت نیاز به نمونه‌هایی برای roll-back یا سرویس‌های دیگر سپهر، فایل `taxi/راهنماي_راه_اندازي_درگاه_پرداخت_اينترنتي_پرداخت_الکترونیک_سپهر_4.txt` شامل جزئیات کامل وب‌سرویس‌ها است.

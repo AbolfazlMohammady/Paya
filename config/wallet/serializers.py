@@ -67,21 +67,50 @@ class DebitSerializer(serializers.Serializer):
 
 class TransferSerializer(serializers.Serializer):
     """Serializer برای انتقال وجه"""
-    recipient_phone = PhoneNumberField(region='IR')
+    method = serializers.ChoiceField(
+        choices=[choice[0] for choice in Transaction.TRANSFER_METHOD_CHOICES],
+        default='phone'
+    )
+    recipient_phone = PhoneNumberField(region='IR', required=False)
+    recipient_wallet_id = serializers.IntegerField(required=False)
     amount = serializers.DecimalField(
         max_digits=15, 
         decimal_places=2,
         min_value=Decimal('10000')
     )
     description = serializers.CharField(max_length=500, required=False, allow_blank=True)
-    
-    def validate_recipient_phone(self, value):
-        return str(value)
+    metadata = serializers.JSONField(required=False, default=dict)
     
     def validate_amount(self, value):
         if value < 10000:
             raise serializers.ValidationError("Minimum transfer amount is 10,000 IRR")
         return value
+    
+    def validate_metadata(self, value):
+        if value is None:
+            return {}
+        if not isinstance(value, dict):
+            raise serializers.ValidationError("Metadata must be a valid object")
+        return value
+    
+    def validate(self, attrs):
+        metadata = attrs.get('metadata') or {}
+        phone = attrs.get('recipient_phone') or metadata.get('phone') or metadata.get('recipient_phone')
+        wallet_id = attrs.get('recipient_wallet_id') or metadata.get('wallet_id') or metadata.get('recipient_wallet_id')
+        
+        if not phone and not wallet_id:
+            raise serializers.ValidationError("Recipient phone or wallet_id is required")
+        
+        if phone:
+            attrs['recipient_phone'] = str(phone)
+        if wallet_id is not None:
+            try:
+                attrs['recipient_wallet_id'] = int(wallet_id)
+            except (TypeError, ValueError):
+                raise serializers.ValidationError("recipient_wallet_id must be an integer")
+        
+        attrs['metadata'] = metadata
+        return attrs
 
 
 class TransactionSerializer(serializers.ModelSerializer):
@@ -97,6 +126,7 @@ class TransactionSerializer(serializers.ModelSerializer):
             'amount', 'balance_before', 'balance_after',
             'description', 'status', 'status_display',
             'reference_id', 'payment_method', 'payment_id',
+            'transfer_method', 'metadata',
             'recipient_info', 'created_at', 'updated_at'
         ]
         read_only_fields = fields
@@ -165,6 +195,8 @@ class TransferResponseSerializer(serializers.Serializer):
     balance_after = serializers.DecimalField(max_digits=15, decimal_places=2)
     status = serializers.CharField()
     created_at = serializers.DateTimeField()
+    method = serializers.CharField()
+    metadata = serializers.JSONField()
 
 
 class GatewayChargeSerializer(serializers.Serializer):
@@ -175,13 +207,15 @@ class GatewayChargeSerializer(serializers.Serializer):
         min_value=Decimal('1000')
     )
     description = serializers.CharField(max_length=500, required=False, allow_blank=True)
-    gateway = serializers.CharField(max_length=50, default='zarinpal', required=False)
     callback_url = serializers.URLField(required=False, allow_blank=True)
     
     def validate_amount(self, value):
         if value <= 0:
             raise serializers.ValidationError("Amount must be greater than zero")
         return value
+
+    def validate(self, attrs):
+        return attrs
 
 
 class GatewayChargeResponseSerializer(serializers.Serializer):

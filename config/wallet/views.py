@@ -222,34 +222,55 @@ class WalletViewSet(viewsets.ViewSet):
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
         
-        recipient_phone = serializer.validated_data['recipient_phone']
+        method = serializer.validated_data.get('method', 'phone')
+        metadata = serializer.validated_data.get('metadata', {})
+        recipient_phone = serializer.validated_data.get('recipient_phone')
+        recipient_wallet_id = serializer.validated_data.get('recipient_wallet_id')
         amount = serializer.validated_data['amount']
         description = serializer.validated_data.get('description', '')
         
-        # بررسی اینکه کاربر به خودش پول نزند
-        if str(request.user.phone) == recipient_phone:
-            return Response(
-                {'detail': 'Cannot transfer to yourself'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+        recipient_user = None
+        recipient_wallet = None
         
-        # یافتن کاربر دریافت‌کننده
-        try:
-            recipient_user = User.objects.get(phone=recipient_phone)
-        except User.DoesNotExist:
-            return Response(
-                {'detail': 'Recipient user not found'},
-                status=status.HTTP_404_NOT_FOUND
-            )
-        
-        # یافتن کیف پول دریافت‌کننده
-        try:
-            recipient_wallet = recipient_user.wallet
-        except Wallet.DoesNotExist:
-            return Response(
-                {'detail': 'Recipient wallet not found'},
-                status=status.HTTP_404_NOT_FOUND
-            )
+        if recipient_wallet_id:
+            if sender_wallet.id == recipient_wallet_id:
+                return Response(
+                    {'detail': 'Cannot transfer to your own wallet'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            try:
+                recipient_wallet = Wallet.objects.select_related('user').get(id=recipient_wallet_id)
+                recipient_user = recipient_wallet.user
+            except Wallet.DoesNotExist:
+                return Response(
+                    {'detail': 'Recipient wallet not found'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+        else:
+            # بررسی اینکه کاربر به خودش پول نزند
+            if recipient_phone and str(request.user.phone) == recipient_phone:
+                return Response(
+                    {'detail': 'Cannot transfer to yourself'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # یافتن کاربر دریافت‌کننده
+            try:
+                recipient_user = User.objects.get(phone=recipient_phone)
+            except User.DoesNotExist:
+                return Response(
+                    {'detail': 'Recipient user not found'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+            
+            # یافتن کیف پول دریافت‌کننده
+            try:
+                recipient_wallet = recipient_user.wallet
+            except Wallet.DoesNotExist:
+                return Response(
+                    {'detail': 'Recipient wallet not found'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
         
         if recipient_wallet.status != 'active':
             return Response(
@@ -258,11 +279,17 @@ class WalletViewSet(viewsets.ViewSet):
             )
         
         try:
+            transfer_metadata = dict(metadata or {})
+            transfer_metadata.setdefault('method', method)
+            transfer_metadata.setdefault('initiator_user_id', request.user.id)
+            
             sender_transaction, recipient_transaction = transfer_money(
                 sender_wallet=sender_wallet,
                 recipient_wallet=recipient_wallet,
                 amount=amount,
-                description=description
+                description=description,
+                method=method,
+                metadata=transfer_metadata
             )
             
             response_data = {
@@ -274,7 +301,9 @@ class WalletViewSet(viewsets.ViewSet):
                 },
                 'balance_after': sender_transaction.balance_after,
                 'status': sender_transaction.status,
-                'created_at': sender_transaction.created_at
+                'created_at': sender_transaction.created_at,
+                'method': sender_transaction.transfer_method,
+                'metadata': sender_transaction.metadata
             }
             response_serializer = TransferResponseSerializer(response_data)
             return Response(response_serializer.data, status=status.HTTP_200_OK)
@@ -362,7 +391,6 @@ class WalletViewSet(viewsets.ViewSet):
         
         amount = serializer.validated_data['amount']
         description = serializer.validated_data.get('description', 'شارژ کیف پول')
-        gateway = serializer.validated_data.get('gateway', 'zarinpal')
         callback_url = serializer.validated_data.get('callback_url', '')
         
         # اگر callback_url داده نشده، از تنظیمات استفاده می‌کنیم
@@ -370,13 +398,22 @@ class WalletViewSet(viewsets.ViewSet):
             base_url = getattr(settings, 'BASE_URL', 'http://localhost:8000')
             callback_url = f"{base_url}/api/wallet/payment-callback/"
         
+        payment_request_id = PaymentRequest.generate_request_id()
+        gateway_metadata = {
+            'invoice_id': payment_request_id,
+            'wallet_id': wallet.id,
+            'user_id': request.user.id,
+            'payload': ''
+        }
+        
         # ایجاد درخواست پرداخت
         payment_result = PaymentGatewayService.create_payment_request(
             amount=amount,
             description=description,
             callback_url=callback_url,
             user_phone=str(request.user.phone),
-            user_email=None
+            user_email=None,
+            metadata=gateway_metadata
         )
         
         if not payment_result.get('success'):
@@ -386,15 +423,25 @@ class WalletViewSet(viewsets.ViewSet):
             )
         
         # ذخیره درخواست پرداخت
+        resolved_gateway = payment_result.get('gateway') or 'sepehr'
+
+        payment_request_metadata = {
+            'gateway_extra': payment_result.get('extra') or {},
+            'gateway_response': payment_result.get('raw_response') or {},
+            'invoice_id': payment_request_id,
+            'callback_url': callback_url,
+        }
+        
         payment_request = PaymentRequest.objects.create(
-            request_id=PaymentRequest.generate_request_id(),
+            request_id=payment_request_id,
             wallet=wallet,
             amount=amount,
             description=description,
-            gateway=gateway,
-            authority=payment_result['authority'],
+            gateway=resolved_gateway,
+            authority=payment_result.get('authority'),
             callback_url=callback_url,
-            status='pending'
+            status='pending',
+            metadata=payment_request_metadata
         )
         
         # محاسبه زمان انقضا (30 دقیقه)
@@ -402,10 +449,10 @@ class WalletViewSet(viewsets.ViewSet):
         
         response_data = {
             'request_id': payment_request.request_id,
-            'payment_url': payment_result['payment_url'],
-            'authority': payment_result['authority'],
+            'payment_url': payment_result.get('payment_url'),
+            'authority': payment_result.get('authority'),
             'amount': amount,
-            'gateway': gateway,
+            'gateway': resolved_gateway,
             'expires_at': expires_at
         }
         

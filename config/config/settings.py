@@ -267,10 +267,20 @@ RESEND_API_KEY=os.environ.get('RESEND_API_KEY', 're_dUAfRuPj_KP9q36Sa2x9UGNXp263
 # Chat bot
 MAMMOUTH_API_KEY = os.getenv('MAMMOUTH_API_KEY')
 
-# Payment Gateway Settings
-# برای تست: می‌توانید از Merchant ID تست استفاده کنید
-# برای دریافت Merchant ID: https://next.zarinpal.com/
-# در حالت Sandbox، پرداخت‌ها واقعی نیستند و فقط برای تست هستند
-ZARINPAL_MERCHANT_ID = os.environ.get('ZARINPAL_MERCHANT_ID', '')
-ZARINPAL_SANDBOX = os.environ.get('ZARINPAL_SANDBOX', 'True') == 'True'  # برای تست True باشد
+# Base URL for callbacks (used by درگاه‌ها نیز)
 BASE_URL = os.environ.get('BASE_URL', 'http://localhost:8000')
+
+# Payment Gateway Settings (Sepehr only)
+PAYMENT_GATEWAY_DEFAULT = 'sepehr'
+PAYMENT_GATEWAYS = {
+    'sepehr': {
+        'ENABLED': os.environ.get('SEPEHR_ENABLED', 'True') == 'True',
+        'TERMINAL_ID': os.environ.get('SEPEHR_TERMINAL_ID', ''),
+        'TOKEN_URL': os.environ.get('SEPEHR_TOKEN_URL', 'https://sepehr.shaparak.ir/Rest/V1/PeymentApi/GetToken'),
+        'PAYMENT_URL': os.environ.get('SEPEHR_PAYMENT_URL', 'https://sepehr.shaparak.ir/Payment/Pay'),
+        'ADVICE_URL': os.environ.get('SEPEHR_ADVICE_URL', 'https://sepehr.shaparak.ir/Rest/V1/PeymentApi/Advice'),
+        'ROLLBACK_URL': os.environ.get('SEPEHR_ROLLBACK_URL', 'https://sepehr.shaparak.ir/Rest/V1/PeymentApi/Rollback'),
+        'TIMEOUT': int(os.environ.get('SEPEHR_TIMEOUT', 10)),
+        'DEFAULT_PAYLOAD': os.environ.get('SEPEHR_DEFAULT_PAYLOAD', ''),
+    }
+}
