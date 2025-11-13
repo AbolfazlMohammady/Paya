@@ -5,6 +5,7 @@ from django.utils.translation import gettext_lazy as _
 from django.utils import timezone
 from django.db.models import F, Q
 import uuid
+import time
 
 from users.core.models import User
 
@@ -304,4 +305,19 @@ class PaymentRequest(models.Model):
     def generate_request_id(cls):
         """تولید شناسه یکتا برای درخواست"""
         return f"req_{uuid.uuid4().hex[:12]}"
+
+    @classmethod
+    def generate_invoice_id_for_gateway(cls):
+        """
+        تولید InvoiceID عددی مطابق الزامات درگاه سپهر
+        حداکثر طول مجاز 20 رقم و باید یکتا باشد
+        """
+        # ترکیب timestamp ثانیه‌ای + 6 رقم تصادفی (uuid) => حداکثر 16 رقم
+        timestamp = int(time.time())
+        random_part = uuid.uuid4().int % 1000000  # عدد 6 رقمی
+        invoice_id = f"{timestamp}{random_part:06d}"
+        # در صورت نیاز truncate به 20 رقم
+        if len(invoice_id) > 20:
+            invoice_id = invoice_id[:20]
+        return invoice_id
 

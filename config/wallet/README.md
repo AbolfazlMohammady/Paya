@@ -17,7 +17,7 @@ PAYMENT_GATEWAY_DEFAULT=sepehr
 
 # تنظیمات درگاه سپهر
 SEPEHR_ENABLED=True
-SEPEHR_TERMINAL_ID=YOUR_TERMINAL_ID
+SEPEHR_TERMINAL_ID=98743989
 SEPEHR_TOKEN_URL=https://sepehr.shaparak.ir/Rest/V1/PeymentApi/GetToken
 SEPEHR_PAYMENT_URL=https://sepehr.shaparak.ir/Payment/Pay
 SEPEHR_ADVICE_URL=https://sepehr.shaparak.ir/Rest/V1/PeymentApi/Advice

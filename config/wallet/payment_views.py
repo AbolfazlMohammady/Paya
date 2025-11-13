@@ -39,11 +39,20 @@ class PaymentCallbackView(views.APIView):
                 status='pending'
             ).first()
         
+        # جستجو با InvoiceID عددی (از metadata)
         if payment_request is None and invoice_id:
+            # ابتدا با request_id جستجو می‌کنیم
             payment_request = PaymentRequest.objects.filter(
                 request_id=str(invoice_id),
                 status='pending'
             ).first()
+            
+            # اگر پیدا نشد، با InvoiceID عددی از metadata جستجو می‌کنیم
+            if payment_request is None:
+                payment_request = PaymentRequest.objects.filter(
+                    metadata__invoice_id=str(invoice_id),
+                    status='pending'
+                ).first()
         
         if payment_request is None:
             return Response(

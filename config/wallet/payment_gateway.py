@@ -45,6 +45,12 @@ class SepehrPaymentGateway:
 
     def _get_timeout(self) -> int:
         return int(self.config.get('TIMEOUT', 10))
+    
+    def _get_verify_ssl(self) -> bool:
+        return bool(self.config.get('VERIFY_SSL', True))
+    
+    def _is_mock_mode(self) -> bool:
+        return bool(self.config.get('MOCK_MODE', False))
 
     def create_payment_request(
         self,
@@ -74,11 +80,58 @@ class SepehrPaymentGateway:
             "callbackURL": callback_url,
             "payload": payload,
         }
+        
+        # لاگ برای دیباگ (فقط در حالت development)
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.debug(f"Sepehr Gateway Request: TerminalID={terminal_id}, Amount={request_body['Amount']}, "
+                     f"InvoiceID={request_body['InvoiceID']}, InvoiceID_length={len(str(invoice_id))}, "
+                     f"callbackURL={callback_url}")
+
+        # حالت Mock برای تست/توسعه
+        if self._is_mock_mode():
+            mock_token = f"MOCK_TOKEN_{uuid.uuid4().hex[:16].upper()}"
+            redirect_url = f"{payment_url}?token={mock_token}&terminalId={terminal_id}"
+            return PaymentResult(
+                success=True,
+                authority=mock_token,
+                payment_url=redirect_url,
+                gateway=self.name,
+                raw_response={
+                    'Status': 0,
+                    'Accesstoken': mock_token,
+                    'Message': 'Mock mode - Payment token generated',
+                    'mock': True
+                },
+                extra={
+                    'terminal_id': terminal_id,
+                    'invoice_id': invoice_id,
+                    'payload': payload,
+                    'token_url': token_url,
+                    'mock_mode': True
+                }
+            )
 
         timeout = self._get_timeout()
 
+        verify_ssl = self._get_verify_ssl()
+        
+        # تنظیمات SSL برای درگاه سپهر
+        # برخی درگاه‌ها نیاز به تنظیمات خاص SSL دارند
+        import urllib3
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        
+        # اگر verify_ssl False است، از verify=False استفاده می‌کنیم
+        ssl_verify = verify_ssl if verify_ssl else False
+
         try:
-            response = requests.post(token_url, json=request_body, timeout=timeout)
+            response = requests.post(
+                token_url, 
+                json=request_body, 
+                timeout=timeout, 
+                verify=ssl_verify,
+                headers={'Content-Type': 'application/json'}
+            )
             response.raise_for_status()
             result = response.json()
 
@@ -101,7 +154,15 @@ class SepehrPaymentGateway:
                     }
                 )
 
-            error_message = result.get('Message') or result.get('error') or 'Sepehr token request failed'
+            # پیام خطای بهتر بر اساس Status
+            status_messages = {
+                -1: 'خطای نامشخص در درگاه',
+                -2: 'خطای اعتبارسنجی: TerminalID، Amount، InvoiceID یا CallbackURL نامعتبر است',
+                -3: 'خطای اتصال به درگاه',
+                -4: 'خطای داخلی درگاه',
+            }
+            
+            error_message = result.get('Message') or status_messages.get(status_value) or f'Sepehr token request failed (Status: {status_value})'
             return PaymentResult(
                 success=False,
                 error=error_message,
@@ -109,17 +170,56 @@ class SepehrPaymentGateway:
                 raw_response=result,
                 gateway=self.name
             )
+        except requests.exceptions.SSLError as exc:
+            # خطای SSL - ممکن است نیاز به غیرفعال کردن SSL verification باشد
+            return PaymentResult(
+                success=False,
+                error=f'SSL connection error: {exc}. Try setting SEPEHR_VERIFY_SSL=False',
+                gateway=self.name,
+                raw_response={
+                    'error_type': 'SSLError',
+                    'error_message': str(exc),
+                    'terminal_id': terminal_id,
+                    'token_url': token_url,
+                    'verify_ssl': verify_ssl,
+                    'request_body': request_body,
+                    'suggestion': 'Set SEPEHR_VERIFY_SSL=False in environment variables'
+                },
+                extra={
+                    'terminal_id': terminal_id,
+                    'invoice_id': invoice_id,
+                    'token_url': token_url,
+                }
+            )
         except requests.exceptions.RequestException as exc:
             return PaymentResult(
                 success=False,
                 error=f'Connection error: {exc}',
-                gateway=self.name
+                gateway=self.name,
+                raw_response={
+                    'error_type': type(exc).__name__,
+                    'error_message': str(exc),
+                    'terminal_id': terminal_id,
+                    'token_url': token_url,
+                    'verify_ssl': verify_ssl,
+                    'request_body': request_body,
+                },
+                extra={
+                    'terminal_id': terminal_id,
+                    'invoice_id': invoice_id,
+                    'token_url': token_url,
+                }
             )
         except Exception as exc:
             return PaymentResult(
                 success=False,
                 error=f'Unexpected error: {exc}',
-                gateway=self.name
+                gateway=self.name,
+                raw_response={
+                    'error_type': type(exc).__name__,
+                    'error_message': str(exc),
+                    'terminal_id': terminal_id,
+                }
             )
 
     def verify_payment(
@@ -139,6 +239,27 @@ class SepehrPaymentGateway:
         if not terminal_id:
             raise ValueError("Sepehr verification requires terminal_id in metadata or config")
 
+        # حالت Mock برای تست/توسعه
+        if self._is_mock_mode():
+            return PaymentResult(
+                success=True,
+                authority=authority,
+                ref_id=str(digital_receipt),
+                gateway=self.name,
+                raw_response={
+                    'Status': 'Ok',
+                    'ReturnId': digital_receipt,
+                    'Message': 'Mock mode - Payment verified',
+                    'mock': True
+                },
+                extra={
+                    'digital_receipt': digital_receipt,
+                    'terminal_id': terminal_id,
+                    'status': 'Ok',
+                    'mock_mode': True
+                }
+            )
+
         advice_url = self.config.get('ADVICE_URL') or 'https://sepehr.shaparak.ir/Rest/V1/PeymentApi/Advice'
         timeout = self._get_timeout()
 
@@ -147,8 +268,10 @@ class SepehrPaymentGateway:
             "Tid": str(terminal_id),
         }
 
+        verify_ssl = self._get_verify_ssl()
+
         try:
-            response = requests.post(advice_url, json=request_body, timeout=timeout)
+            response = requests.post(advice_url, json=request_body, timeout=timeout, verify=verify_ssl)
             response.raise_for_status()
             result = response.json()
 

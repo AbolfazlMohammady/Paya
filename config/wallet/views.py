@@ -393,14 +393,27 @@ class WalletViewSet(viewsets.ViewSet):
         description = serializer.validated_data.get('description', 'شارژ کیف پول')
         callback_url = serializer.validated_data.get('callback_url', '')
         
+        # خواندن terminal_id از settings (قبل از استفاده)
+        gateways_config = getattr(settings, 'PAYMENT_GATEWAYS', {})
+        sepehr_config = gateways_config.get('sepehr', {})
+        terminal_id_from_config = sepehr_config.get('TERMINAL_ID', 'N/A')
+        
         # اگر callback_url داده نشده، از تنظیمات استفاده می‌کنیم
         if not callback_url:
             base_url = getattr(settings, 'BASE_URL', 'http://localhost:8000')
             callback_url = f"{base_url}/api/wallet/payment-callback/"
         
+        # هشدار برای Callback URL محلی (درگاه نمی‌تواند به localhost دسترسی داشته باشد)
+        if 'localhost' in callback_url or '127.0.0.1' in callback_url:
+            # در حالت production این باید خطا بدهد، اما برای تست اجازه می‌دهیم
+            pass
+        
         payment_request_id = PaymentRequest.generate_request_id()
+        # تولید InvoiceID عددی برای درگاه سپهر
+        invoice_id_for_gateway = PaymentRequest.generate_invoice_id_for_gateway()
         gateway_metadata = {
-            'invoice_id': payment_request_id,
+            'invoice_id': invoice_id_for_gateway,  # InvoiceID عددی برای درگاه
+            'request_id': payment_request_id,  # شناسه داخلی برای ردیابی
             'wallet_id': wallet.id,
             'user_id': request.user.id,
             'payload': ''
@@ -416,21 +429,72 @@ class WalletViewSet(viewsets.ViewSet):
             metadata=gateway_metadata
         )
         
-        if not payment_result.get('success'):
-            return Response(
-                {'detail': payment_result.get('error', 'Payment gateway error')},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        # ذخیره درخواست پرداخت
+        # ذخیره درخواست پرداخت (حتی در صورت خطا برای دیباگ)
         resolved_gateway = payment_result.get('gateway') or 'sepehr'
-
+        
         payment_request_metadata = {
             'gateway_extra': payment_result.get('extra') or {},
             'gateway_response': payment_result.get('raw_response') or {},
-            'invoice_id': payment_request_id,
+            'invoice_id': invoice_id_for_gateway,  # InvoiceID عددی برای درگاه
+            'request_id': payment_request_id,  # شناسه داخلی
             'callback_url': callback_url,
+            'request_body': {
+                'amount': str(amount),
+                'terminal_id': terminal_id_from_config,
+            }
         }
+        
+        # اگر خطا داشت، درخواست را با status failed ذخیره می‌کنیم
+        if not payment_result.get('success'):
+            payment_request = PaymentRequest.objects.create(
+                request_id=payment_request_id,
+                wallet=wallet,
+                amount=amount,
+                description=description,
+                gateway=resolved_gateway,
+                authority=None,
+                callback_url=callback_url,
+                status='failed',
+                metadata=payment_request_metadata
+            )
+            
+            # اضافه کردن اطلاعات دیباگ بیشتر
+            debug_info = dict(payment_result.get('raw_response') or {})
+            
+            # خواندن terminal_id از gateway_extra یا config
+            gateway_extra = payment_result.get('extra') or {}
+            terminal_id_debug = 'N/A'
+            
+            # اول از gateway_extra تلاش می‌کنیم
+            if isinstance(gateway_extra, dict) and gateway_extra.get('terminal_id'):
+                terminal_id_debug = gateway_extra.get('terminal_id')
+            # سپس از payment_request_metadata
+            elif isinstance(payment_request_metadata, dict):
+                request_body = payment_request_metadata.get('request_body', {})
+                if isinstance(request_body, dict) and request_body.get('terminal_id'):
+                    terminal_id_debug = request_body.get('terminal_id')
+            
+            # اگر هنوز پیدا نشد، از terminal_id_from_config استفاده می‌کنیم
+            if terminal_id_debug == 'N/A':
+                terminal_id_debug = terminal_id_from_config
+            
+            debug_info.update({
+                'invoice_id_sent': invoice_id_for_gateway,
+                'invoice_id_length': len(str(invoice_id_for_gateway)),
+                'invoice_id_is_numeric': str(invoice_id_for_gateway).isdigit(),
+                'amount_sent': str(amount),
+                'callback_url': callback_url,
+                'terminal_id': terminal_id_debug,
+            })
+            
+            return Response(
+                {
+                    'detail': payment_result.get('error', 'Payment gateway error'),
+                    'request_id': payment_request_id,
+                    'debug_info': debug_info
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
         
         payment_request = PaymentRequest.objects.create(
             request_id=payment_request_id,

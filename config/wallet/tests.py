@@ -1,8 +1,10 @@
 from django.test import TestCase
 from django.contrib.auth import get_user_model
 from decimal import Decimal
-from .models import Wallet, Transaction
+from unittest.mock import patch, Mock
+from .models import Wallet, Transaction, PaymentRequest
 from .utils import charge_wallet, debit_wallet, transfer_money
+from .payment_gateway import PaymentGatewayService
 
 User = get_user_model()
 
@@ -130,5 +132,113 @@ class WalletSignalTest(TestCase):
         self.assertEqual(user.wallet.balance, Decimal('0'))
         self.assertEqual(user.wallet.currency, 'IRR')
         self.assertEqual(user.wallet.status, 'active')
+
+
+class PaymentGatewayTest(TestCase):
+    """تست درخواست شارژ از طریق درگاه پرداخت"""
+    
+    def setUp(self):
+        self.user = User.objects.create_user(phone='09123456789', password='testpass123')
+        self.wallet = self.user.wallet
+        self.wallet.status = 'active'
+        self.wallet.save()
+    
+    def test_invoice_id_is_numeric(self):
+        """تست اینکه InvoiceID برای درگاه عددی است"""
+        invoice_id = PaymentRequest.generate_invoice_id_for_gateway()
+        # باید فقط عدد باشد (نه req_xxx)
+        self.assertTrue(invoice_id.isdigit(), f"InvoiceID باید عددی باشد، اما {invoice_id} است")
+        # باید حداکثر 20 رقم باشد
+        self.assertLessEqual(len(invoice_id), 20, f"InvoiceID باید حداکثر 20 رقم باشد")
+        # باید حداقل 10 رقم باشد (timestamp)
+        self.assertGreaterEqual(len(invoice_id), 10, f"InvoiceID باید حداقل 10 رقم باشد")
+    
+    @patch('wallet.payment_gateway.requests.post')
+    def test_gateway_request_with_numeric_invoice_id(self, mock_post):
+        """تست ارسال درخواست به درگاه با InvoiceID عددی"""
+        # شبیه‌سازی پاسخ موفق از درگاه
+        mock_response = Mock()
+        mock_response.json.return_value = {
+            'Status': 0,
+            'Accesstoken': 'TEST_TOKEN_12345',
+            'Message': 'Success'
+        }
+        mock_response.raise_for_status = Mock()
+        mock_post.return_value = mock_response
+        
+        # تولید InvoiceID عددی
+        invoice_id = PaymentRequest.generate_invoice_id_for_gateway()
+        
+        # ایجاد درخواست پرداخت
+        result = PaymentGatewayService.create_payment_request(
+            amount=Decimal('100000'),
+            description='تست شارژ',
+            callback_url='https://example.com/callback',
+            metadata={
+                'invoice_id': invoice_id,
+                'wallet_id': self.wallet.id,
+                'user_id': self.user.id,
+            }
+        )
+        
+        # بررسی‌ها
+        self.assertTrue(result.get('success'), "درخواست باید موفق باشد")
+        self.assertIsNotNone(result.get('payment_url'), "payment_url باید وجود داشته باشد")
+        self.assertIn('sepehr.shaparak.ir', result.get('payment_url', ''), "payment_url باید به درگاه سپهر اشاره کند")
+        
+        # بررسی اینکه InvoiceID عددی به درگاه ارسال شده
+        call_args = mock_post.call_args
+        request_body = call_args[1]['json']  # json parameter
+        self.assertTrue(str(request_body['InvoiceID']).isdigit(), 
+                       f"InvoiceID باید عددی باشد، اما {request_body['InvoiceID']} است")
+        self.assertEqual(request_body['InvoiceID'], invoice_id, 
+                        "InvoiceID ارسالی باید با InvoiceID تولید شده یکسان باشد")
+    
+    @patch('wallet.payment_gateway.SepehrPaymentGateway._is_mock_mode')
+    @patch('wallet.payment_gateway.requests.post')
+    def test_gateway_charge_viewset_integration(self, mock_post, mock_is_mock_mode):
+        """تست یکپارچه ViewSet برای درخواست شارژ"""
+        from rest_framework.test import APIClient
+        from rest_framework_simplejwt.tokens import RefreshToken
+        
+        # فعال کردن Mock Mode
+        mock_is_mock_mode.return_value = True
+        
+        # شبیه‌سازی پاسخ موفق از درگاه (برای حالت غیر Mock)
+        mock_response = Mock()
+        mock_response.json.return_value = {
+            'Status': 0,
+            'Accesstoken': 'TEST_TOKEN_12345',
+            'Message': 'Success'
+        }
+        mock_response.raise_for_status = Mock()
+        mock_post.return_value = mock_response
+        
+        # دریافت token
+        refresh = RefreshToken.for_user(self.user)
+        client = APIClient()
+        client.credentials(HTTP_AUTHORIZATION=f'Bearer {refresh.access_token}')
+        
+        # ارسال درخواست
+        response = client.post('/api/wallet/charge-gateway/', {
+            'amount': '100000',
+            'description': 'تست شارژ'
+        }, format='json')
+        
+        # بررسی پاسخ
+        self.assertEqual(response.status_code, 201, 
+                       f"کد وضعیت باید 201 باشد، اما {response.status_code} است. پاسخ: {response.data}")
+        data = response.json()
+        self.assertIn('payment_url', data, "پاسخ باید شامل payment_url باشد")
+        self.assertIn('authority', data, "پاسخ باید شامل authority باشد")
+        self.assertIn('request_id', data, "پاسخ باید شامل request_id باشد")
+        
+        # بررسی اینکه PaymentRequest ایجاد شده
+        payment_request = PaymentRequest.objects.get(request_id=data['request_id'])
+        self.assertIsNotNone(payment_request.metadata.get('invoice_id'), 
+                           "metadata باید شامل invoice_id باشد")
+        invoice_id = payment_request.metadata['invoice_id']
+        self.assertTrue(str(invoice_id).isdigit(), 
+                      f"invoice_id در metadata باید عددی باشد: {invoice_id}")
 
 

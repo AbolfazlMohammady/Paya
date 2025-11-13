@@ -275,12 +275,14 @@ PAYMENT_GATEWAY_DEFAULT = 'sepehr'
 PAYMENT_GATEWAYS = {
     'sepehr': {
         'ENABLED': os.environ.get('SEPEHR_ENABLED', 'True') == 'True',
-        'TERMINAL_ID': os.environ.get('SEPEHR_TERMINAL_ID', ''),
+        'MOCK_MODE': os.environ.get('SEPEHR_MOCK_MODE', 'False') == 'True',  # حالت Mock برای تست/توسعه
+        'TERMINAL_ID': os.environ.get('SEPEHR_TERMINAL_ID', '98743989'),
         'TOKEN_URL': os.environ.get('SEPEHR_TOKEN_URL', 'https://sepehr.shaparak.ir/Rest/V1/PeymentApi/GetToken'),
         'PAYMENT_URL': os.environ.get('SEPEHR_PAYMENT_URL', 'https://sepehr.shaparak.ir/Payment/Pay'),
         'ADVICE_URL': os.environ.get('SEPEHR_ADVICE_URL', 'https://sepehr.shaparak.ir/Rest/V1/PeymentApi/Advice'),
         'ROLLBACK_URL': os.environ.get('SEPEHR_ROLLBACK_URL', 'https://sepehr.shaparak.ir/Rest/V1/PeymentApi/Rollback'),
         'TIMEOUT': int(os.environ.get('SEPEHR_TIMEOUT', 10)),
         'DEFAULT_PAYLOAD': os.environ.get('SEPEHR_DEFAULT_PAYLOAD', ''),
+        'VERIFY_SSL': os.environ.get('SEPEHR_VERIFY_SSL', 'True') == 'True',
     }
 }
