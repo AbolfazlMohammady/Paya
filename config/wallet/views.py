@@ -5,16 +5,23 @@ from django.utils import timezone
 from django.db import transaction as db_transaction
 from django.core.paginator import Paginator
 from django.db.models import Q
+from django.http import HttpResponse
 from decimal import Decimal
+from io import BytesIO
+import qrcode
+from qrcode.constants import ERROR_CORRECT_M
+from PIL import Image
 
-from .models import Wallet, Transaction, PaymentRequest
+from .models import Wallet, Transaction, PaymentRequest, WalletQRCode
 from .serializers import (
     WalletSerializer, WalletCreateSerializer,
     ChargeSerializer, DebitSerializer, TransferSerializer,
     TransactionSerializer, TransactionDetailSerializer,
     BalanceSerializer, ChargeResponseSerializer,
     DebitResponseSerializer, TransferResponseSerializer,
-    GatewayChargeSerializer, GatewayChargeResponseSerializer
+    GatewayChargeSerializer, GatewayChargeResponseSerializer,
+    QRGenerateSerializer, QRGenerateResponseSerializer,
+    QRPayloadSerializer, QRInfoSerializer
 )
 from .utils import (
     charge_wallet, debit_wallet, transfer_money,
@@ -231,52 +238,116 @@ class WalletViewSet(viewsets.ViewSet):
         
         recipient_user = None
         recipient_wallet = None
-        
-        if recipient_wallet_id:
-            if sender_wallet.id == recipient_wallet_id:
+        qr_instance = None
+
+        if method == 'qr':
+            qr_payload = metadata.get('qr_payload') or metadata.get('payload')
+            try:
+                qr_instance = WalletQRCode.objects.select_related('wallet__user').get(qr_payload=qr_payload)
+            except WalletQRCode.DoesNotExist:
+                return Response(
+                    {'detail': 'QR code not found'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+
+            if qr_instance.status != 'active':
+                return Response(
+                    {'detail': 'QR code is not active'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            if qr_instance.is_expired():
+                if qr_instance.status != 'expired':
+                    qr_instance.status = 'expired'
+                    qr_instance.save(update_fields=['status', 'updated_at'])
+                return Response(
+                    {'detail': 'QR code is expired'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            recipient_wallet = qr_instance.wallet
+            recipient_user = recipient_wallet.user
+
+            if sender_wallet.id == recipient_wallet.id:
                 return Response(
                     {'detail': 'Cannot transfer to your own wallet'},
                     status=status.HTTP_400_BAD_REQUEST
                 )
-            try:
-                recipient_wallet = Wallet.objects.select_related('user').get(id=recipient_wallet_id)
-                recipient_user = recipient_wallet.user
-            except Wallet.DoesNotExist:
+
+            if recipient_wallet.status != 'active':
                 return Response(
-                    {'detail': 'Recipient wallet not found'},
-                    status=status.HTTP_404_NOT_FOUND
-                )
-        else:
-            # بررسی اینکه کاربر به خودش پول نزند
-            if recipient_phone and str(request.user.phone) == recipient_phone:
-                return Response(
-                    {'detail': 'Cannot transfer to yourself'},
+                    {'detail': 'Recipient wallet is not active'},
                     status=status.HTTP_400_BAD_REQUEST
                 )
-            
-            # یافتن کاربر دریافت‌کننده
-            try:
-                recipient_user = User.objects.get(phone=recipient_phone)
-            except User.DoesNotExist:
+
+            if amount is None:
+                amount = qr_instance.amount
+            if amount is None:
                 return Response(
-                    {'detail': 'Recipient user not found'},
-                    status=status.HTTP_404_NOT_FOUND
+                    {'detail': 'Amount is required for this QR'},
+                    status=status.HTTP_400_BAD_REQUEST
                 )
-            
-            # یافتن کیف پول دریافت‌کننده
-            try:
-                recipient_wallet = recipient_user.wallet
-            except Wallet.DoesNotExist:
+            if amount < Decimal('10000'):
                 return Response(
-                    {'detail': 'Recipient wallet not found'},
-                    status=status.HTTP_404_NOT_FOUND
+                    {'detail': 'Minimum transfer amount is 10,000 IRR'},
+                    status=status.HTTP_400_BAD_REQUEST
                 )
-        
-        if recipient_wallet.status != 'active':
-            return Response(
-                {'detail': 'Recipient wallet is not active'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+
+            if not description:
+                description = qr_instance.description or 'پرداخت با QR'
+
+            metadata = dict(metadata or {})
+            metadata.setdefault('qr_payload', qr_instance.qr_payload)
+            metadata.setdefault('qr_id', qr_instance.id)
+            metadata.setdefault('qr_owner_wallet_id', recipient_wallet.id)
+            metadata.setdefault('qr_owner_user_id', recipient_wallet.user_id)
+            metadata.setdefault('qr_fixed_amount', bool(qr_instance.amount is not None))
+        else:
+            if recipient_wallet_id:
+                if sender_wallet.id == recipient_wallet_id:
+                    return Response(
+                        {'detail': 'Cannot transfer to your own wallet'},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                try:
+                    recipient_wallet = Wallet.objects.select_related('user').get(id=recipient_wallet_id)
+                    recipient_user = recipient_wallet.user
+                except Wallet.DoesNotExist:
+                    return Response(
+                        {'detail': 'Recipient wallet not found'},
+                        status=status.HTTP_404_NOT_FOUND
+                    )
+            else:
+                # بررسی اینکه کاربر به خودش پول نزند
+                if recipient_phone and str(request.user.phone) == recipient_phone:
+                    return Response(
+                        {'detail': 'Cannot transfer to yourself'},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                
+                # یافتن کاربر دریافت‌کننده
+                try:
+                    recipient_user = User.objects.get(phone=recipient_phone)
+                except User.DoesNotExist:
+                    return Response(
+                        {'detail': 'Recipient user not found'},
+                        status=status.HTTP_404_NOT_FOUND
+                    )
+                
+                # یافتن کیف پول دریافت‌کننده
+                try:
+                    recipient_wallet = recipient_user.wallet
+                except Wallet.DoesNotExist:
+                    return Response(
+                        {'detail': 'Recipient wallet not found'},
+                        status=status.HTTP_404_NOT_FOUND
+                    )
+
+            if recipient_wallet.status != 'active':
+                return Response(
+                    {'detail': 'Recipient wallet is not active'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
         
         try:
             transfer_metadata = dict(metadata or {})
@@ -291,6 +362,13 @@ class WalletViewSet(viewsets.ViewSet):
                 method=method,
                 metadata=transfer_metadata
             )
+
+            if qr_instance:
+                qr_instance.mark_used({
+                    'used_by_wallet_id': sender_wallet.id,
+                    'used_by_user_id': request.user.id,
+                    'amount': str(amount)
+                })
             
             response_data = {
                 'transaction_id': sender_transaction.transaction_id,
@@ -317,7 +395,7 @@ class WalletViewSet(viewsets.ViewSet):
                 {'detail': str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
-    
+
     @action(detail=False, methods=['get'], url_path='transactions')
     def transactions(self, request):
         """
@@ -522,6 +600,170 @@ class WalletViewSet(viewsets.ViewSet):
         
         response_serializer = GatewayChargeResponseSerializer(response_data)
         return Response(response_serializer.data, status=status.HTTP_201_CREATED)
+
+    @action(detail=False, methods=['post'], url_path='qr/generate')
+    def generate_qr(self, request):
+        """
+        ایجاد QR پرداخت / انتقال
+        POST /api/wallet/qr/generate/
+        """
+        try:
+            wallet = request.user.wallet
+        except Wallet.DoesNotExist:
+            return Response(
+                {'detail': 'Wallet not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        if wallet.status != 'active':
+            return Response(
+                {'detail': 'Wallet is not active'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        serializer = QRGenerateSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        data = serializer.validated_data
+        amount = data.get('amount')
+        description = data.get('description', '')
+        expires_in = data.get('expires_in', 300)
+        metadata = data.get('metadata', {})
+
+        qr = WalletQRCode.create_qr(
+            wallet=wallet,
+            amount=amount,
+            description=description,
+            expires_in=expires_in,
+            metadata=metadata
+        )
+
+        base_url = getattr(settings, 'BASE_URL', 'http://localhost:8000')
+        qr_content = f"PAYAQR:{qr.qr_payload}"
+        qr_url = f"{base_url}/api/wallet/qr/lookup/"
+        deeplink = f"paya://wallet/qr/{qr.qr_payload}"
+
+        response_payload = {
+            'qr_payload': qr.qr_payload,
+            'qr_content': qr_content,
+            'qr_url': qr_url,
+            'deeplink': deeplink,
+            'amount': qr.amount,
+            'description': qr.description,
+            'expires_at': qr.expires_at,
+            'status': qr.status
+        }
+
+        response_serializer = QRGenerateResponseSerializer(response_payload)
+        return Response(response_serializer.data, status=status.HTTP_201_CREATED)
+
+    @action(detail=False, methods=['post'], url_path='qr/lookup')
+    def lookup_qr(self, request):
+        """
+        دریافت اطلاعات QR
+        POST /api/wallet/qr/lookup/
+        """
+        serializer = QRPayloadSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        payload = serializer.validated_data['qr_payload']
+        try:
+            qr = WalletQRCode.objects.select_related('wallet__user').get(qr_payload=payload)
+        except WalletQRCode.DoesNotExist:
+            return Response({'detail': 'QR code not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        if qr.status == 'active' and qr.is_expired():
+            qr.status = 'expired'
+            qr.save(update_fields=['status', 'updated_at'])
+
+        owner_info = {
+            'wallet_id': qr.wallet.id,
+            'user_id': qr.wallet.user_id,
+            'phone': str(qr.wallet.user.phone),
+            'fullname': qr.wallet.user.fullname or ''
+        }
+
+        info_payload = {
+            'qr_payload': qr.qr_payload,
+            'status': qr.status,
+            'expires_at': qr.expires_at,
+            'amount': qr.amount,
+            'description': qr.description,
+            'qr_content': f"PAYAQR:{qr.qr_payload}",
+            'owner': owner_info,
+            'metadata': qr.metadata,
+        }
+
+        response_serializer = QRInfoSerializer(info_payload)
+        return Response(response_serializer.data, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=['get'], url_path='qr/image')
+    def qr_image(self, request):
+        """
+        دریافت تصویر QR به‌صورت PNG
+        GET /api/wallet/qr/image/?qr_payload=...
+        """
+        qr_payload = request.query_params.get('qr_payload') or request.query_params.get('payload')
+        if not qr_payload:
+            return Response(
+                {'detail': 'qr_payload query parameter is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            qr = WalletQRCode.objects.get(qr_payload=qr_payload)
+        except WalletQRCode.DoesNotExist:
+            return Response(
+                {'detail': 'QR code not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        if qr.status == 'active' and qr.is_expired():
+            qr.status = 'expired'
+            qr.save(update_fields=['status', 'updated_at'])
+            return Response(
+                {'detail': 'QR code is expired'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        size_param = request.query_params.get('size')
+        target_size = None
+        if size_param:
+            try:
+                target_size = int(size_param)
+            except (TypeError, ValueError):
+                return Response(
+                    {'detail': 'size must be an integer'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            target_size = max(128, min(target_size, 1024))
+
+        qr_content = f"PAYAQR:{qr.qr_payload}"
+
+        qr_factory = qrcode.QRCode(
+            version=None,
+            error_correction=ERROR_CORRECT_M,
+            box_size=10,
+            border=4,
+        )
+        qr_factory.add_data(qr_content)
+        qr_factory.make(fit=True)
+        image = qr_factory.make_image(fill_color="black", back_color="white").convert("RGB")
+
+        if target_size:
+            image = image.resize((target_size, target_size), resample=Image.NEAREST)
+
+        buffer = BytesIO()
+        image.save(buffer, format='PNG')
+        buffer.seek(0)
+
+        response = HttpResponse(buffer.getvalue(), content_type='image/png')
+        response['Content-Disposition'] = f'inline; filename="{qr.qr_payload}.png"'
+        response['Cache-Control'] = 'max-age=300'
+        response['X-QR-Status'] = qr.status
+        return response
 
 
 class TransactionViewSet(viewsets.ViewSet):

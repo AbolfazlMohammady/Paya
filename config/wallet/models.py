@@ -6,6 +6,7 @@ from django.utils import timezone
 from django.db.models import F, Q
 import uuid
 import time
+from datetime import timedelta
 
 from users.core.models import User
 
@@ -320,4 +321,95 @@ class PaymentRequest(models.Model):
         if len(invoice_id) > 20:
             invoice_id = invoice_id[:20]
         return invoice_id
+
+
+class WalletQRCode(models.Model):
+    """مدل برای ذخیره QR های پرداخت/انتقال"""
+
+    STATUS_CHOICES = [
+        ('active', 'فعال'),
+        ('used', 'استفاده شده'),
+        ('expired', 'منقضی شده'),
+        ('cancelled', 'لغو شده'),
+    ]
+
+    qr_payload = models.CharField(max_length=64, unique=True, verbose_name=_('شناسه QR'))
+    wallet = models.ForeignKey(
+        Wallet,
+        on_delete=models.CASCADE,
+        related_name='qr_codes',
+        verbose_name=_('کیف پول صادرکننده')
+    )
+    amount = models.DecimalField(
+        max_digits=15,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        verbose_name=_('مبلغ ثابت')
+    )
+    currency = models.CharField(max_length=3, default='IRR', verbose_name=_('ارز'))
+    description = models.CharField(max_length=255, blank=True, verbose_name=_('توضیحات'))
+    metadata = models.JSONField(default=dict, blank=True, verbose_name=_('اطلاعات اضافی'))
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='active', verbose_name=_('وضعیت'))
+    expires_at = models.DateTimeField(verbose_name=_('تاریخ انقضا'))
+    used_at = models.DateTimeField(null=True, blank=True, verbose_name=_('تاریخ استفاده'))
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name=_('تاریخ ایجاد'))
+    updated_at = models.DateTimeField(auto_now=True, verbose_name=_('تاریخ به‌روزرسانی'))
+    usage_metadata = models.JSONField(default=dict, blank=True, verbose_name=_('اطلاعات استفاده'))
+
+    class Meta:
+        db_table = 'wallet_qr_codes'
+        ordering = ['-created_at']
+        verbose_name = _('QR پرداخت')
+        verbose_name_plural = _('QR های پرداخت')
+        indexes = [
+            models.Index(fields=['qr_payload']),
+            models.Index(fields=['wallet', 'status']),
+            models.Index(fields=['expires_at']),
+        ]
+
+    def __str__(self):
+        return f"{self.qr_payload} - {self.wallet.user.phone}"
+
+    @staticmethod
+    def generate_unique_payload(prefix='qr_', length=12):
+        base = prefix + uuid.uuid4().hex[:length].upper()
+        counter = 0
+        payload = base
+        while WalletQRCode.objects.filter(qr_payload=payload).exists():
+            counter += 1
+            payload = f"{base}{counter}"
+        return payload
+
+    @classmethod
+    def create_qr(cls, wallet, amount=None, description='', expires_in=300, metadata=None):
+        metadata = metadata or {}
+        payload = cls.generate_unique_payload()
+        expires_at = timezone.now() + timedelta(seconds=expires_in)
+        qr = cls.objects.create(
+            qr_payload=payload,
+            wallet=wallet,
+            amount=amount,
+            description=description or '',
+            metadata=metadata,
+            expires_at=expires_at,
+        )
+        return qr
+
+    def is_expired(self):
+        return timezone.now() >= self.expires_at
+
+    def mark_used(self, usage_metadata=None):
+        usage_metadata = usage_metadata or {}
+        self.status = 'used'
+        self.used_at = timezone.now()
+        if usage_metadata:
+            merged = self.usage_metadata or {}
+            merged.update(usage_metadata)
+            self.usage_metadata = merged
+        self.save(update_fields=['status', 'used_at', 'usage_metadata', 'updated_at'])
+
+    def cancel(self):
+        self.status = 'cancelled'
+        self.save(update_fields=['status', 'updated_at'])
 

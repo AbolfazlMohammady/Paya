@@ -76,7 +76,8 @@ class TransferSerializer(serializers.Serializer):
     amount = serializers.DecimalField(
         max_digits=15, 
         decimal_places=2,
-        min_value=Decimal('10000')
+        min_value=Decimal('10000'),
+        required=False
     )
     description = serializers.CharField(max_length=500, required=False, allow_blank=True)
     metadata = serializers.JSONField(required=False, default=dict)
@@ -94,7 +95,29 @@ class TransferSerializer(serializers.Serializer):
         return value
     
     def validate(self, attrs):
+        method = attrs.get('method', 'phone')
         metadata = attrs.get('metadata') or {}
+        
+        amount = attrs.get('amount')
+
+        if method == 'qr':
+            qr_payload = metadata.get('qr_payload') or metadata.get('payload')
+            if not qr_payload:
+                raise serializers.ValidationError({
+                    'metadata': "qr_payload is required for QR transfers"
+                })
+            attrs['metadata'] = metadata
+            # amount می‌تواند خالی باشد و بعداً از QR تنظیم شود
+            if amount is not None and amount < Decimal('10000'):
+                raise serializers.ValidationError({
+                    'amount': "Minimum transfer amount is 10,000 IRR"
+                })
+            attrs['metadata'] = metadata
+            return attrs
+        
+        if amount is None:
+            raise serializers.ValidationError({'amount': 'This field is required'})
+
         phone = attrs.get('recipient_phone') or metadata.get('phone') or metadata.get('recipient_phone')
         wallet_id = attrs.get('recipient_wallet_id') or metadata.get('wallet_id') or metadata.get('recipient_wallet_id')
         
@@ -226,4 +249,50 @@ class GatewayChargeResponseSerializer(serializers.Serializer):
     amount = serializers.DecimalField(max_digits=15, decimal_places=2)
     gateway = serializers.CharField()
     expires_at = serializers.DateTimeField()
+
+
+class QRGenerateSerializer(serializers.Serializer):
+    """Serializer برای ایجاد QR"""
+    amount = serializers.DecimalField(
+        max_digits=15,
+        decimal_places=2,
+        min_value=Decimal('10000'),
+        required=False
+    )
+    description = serializers.CharField(max_length=255, required=False, allow_blank=True)
+    expires_in = serializers.IntegerField(required=False, min_value=60, max_value=86400)
+    metadata = serializers.JSONField(required=False, default=dict)
+
+    def validate_metadata(self, value):
+        if value is None:
+            return {}
+        if not isinstance(value, dict):
+            raise serializers.ValidationError("Metadata must be a valid object")
+        return value
+
+
+class QRGenerateResponseSerializer(serializers.Serializer):
+    qr_payload = serializers.CharField()
+    qr_content = serializers.CharField()
+    qr_url = serializers.CharField()
+    deeplink = serializers.CharField()
+    amount = serializers.DecimalField(max_digits=15, decimal_places=2, allow_null=True, required=False)
+    description = serializers.CharField(allow_blank=True, required=False)
+    expires_at = serializers.DateTimeField()
+    status = serializers.CharField()
+
+
+class QRPayloadSerializer(serializers.Serializer):
+    qr_payload = serializers.CharField()
+
+
+class QRInfoSerializer(serializers.Serializer):
+    qr_payload = serializers.CharField()
+    status = serializers.CharField()
+    expires_at = serializers.DateTimeField()
+    amount = serializers.DecimalField(max_digits=15, decimal_places=2, allow_null=True, required=False)
+    description = serializers.CharField(allow_blank=True, required=False)
+    qr_content = serializers.CharField()
+    owner = serializers.DictField()
+    metadata = serializers.JSONField()
 

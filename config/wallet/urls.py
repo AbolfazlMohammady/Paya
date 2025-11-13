@@ -11,6 +11,9 @@ wallet_charge_gateway = WalletViewSet.as_view({'post': 'charge_gateway'})
 wallet_debit = WalletViewSet.as_view({'post': 'debit'})
 wallet_transfer = WalletViewSet.as_view({'post': 'transfer'})
 wallet_transactions = WalletViewSet.as_view({'get': 'transactions'})
+wallet_qr_generate = WalletViewSet.as_view({'post': 'generate_qr'})
+wallet_qr_lookup = WalletViewSet.as_view({'post': 'lookup_qr'})
+wallet_qr_image = WalletViewSet.as_view({'get': 'qr_image'})
 transaction_detail = TransactionViewSet.as_view({'get': 'retrieve'})
 
 urlpatterns = [
@@ -23,6 +26,9 @@ urlpatterns = [
     path('transfer/', wallet_transfer, name='wallet-transfer'),
     path('transactions/', wallet_transactions, name='wallet-transactions'),
     path('transactions/<str:pk>/', transaction_detail, name='transaction-detail'),
+    path('qr/generate/', wallet_qr_generate, name='wallet-qr-generate'),
+    path('qr/lookup/', wallet_qr_lookup, name='wallet-qr-lookup'),
+    path('qr/image/', wallet_qr_image, name='wallet-qr-image'),
     # Payment callback and status
     path('payment-callback/', PaymentCallbackView.as_view(), name='payment-callback'),
     path('payment-status/<str:request_id>/', PaymentStatusView.as_view(), name='payment-status'),
