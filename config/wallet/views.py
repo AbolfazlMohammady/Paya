@@ -24,7 +24,7 @@ from .serializers import (
     QRPayloadSerializer, QRInfoSerializer
 )
 from .utils import (
-    charge_wallet, debit_wallet, transfer_money,
+    charge_wallet, debit_wallet, transfer_money, transfer_to_iban,
     MIN_TRANSFER_AMOUNT
 )
 from .payment_gateway import PaymentGatewayService
@@ -302,6 +302,48 @@ class WalletViewSet(viewsets.ViewSet):
             metadata.setdefault('qr_owner_wallet_id', recipient_wallet.id)
             metadata.setdefault('qr_owner_user_id', recipient_wallet.user_id)
             metadata.setdefault('qr_fixed_amount', bool(qr_instance.amount is not None))
+        elif method == 'iban':
+            # انتقال با شبا (برداشت به حساب بانکی خارج از شبکه)
+            iban = metadata.get('iban')
+            if not iban:
+                return Response(
+                    {'detail': 'IBAN is required in metadata'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # استفاده از تابع مخصوص انتقال به شبا
+            try:
+                transaction = transfer_to_iban(
+                    sender_wallet=sender_wallet,
+                    iban=iban,
+                    amount=amount,
+                    description=description or f'برداشت به شبا {iban[-4:]}',
+                    metadata=metadata
+                )
+                
+                response_data = {
+                    'transaction_id': transaction.transaction_id,
+                    'amount': transaction.amount,
+                    'recipient': None,  # برای IBAN recipient نداریم
+                    'iban': iban[-4:],  # فقط 4 رقم آخر برای نمایش
+                    'balance_after': transaction.balance_after,  # موجودی کم شده
+                    'status': transaction.status,  # 'completed' - انتقال فوری انجام شده
+                    'created_at': transaction.created_at,
+                    'method': transaction.transfer_method,
+                    'metadata': transaction.metadata
+                }
+                response_serializer = TransferResponseSerializer(response_data)
+                return Response(response_serializer.data, status=status.HTTP_200_OK)  # 200 OK برای تراکنش completed
+            except ValueError as e:
+                return Response(
+                    {'detail': str(e)},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            except Exception as e:
+                return Response(
+                    {'detail': str(e)},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
         else:
             if recipient_wallet_id:
                 if sender_wallet.id == recipient_wallet_id:

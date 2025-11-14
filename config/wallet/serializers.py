@@ -3,6 +3,7 @@ from phonenumber_field.serializerfields import PhoneNumberField
 from decimal import Decimal
 
 from .models import Wallet, Transaction, WalletLimit
+from .utils import validate_iranian_iban
 from users.core.models import User
 
 
@@ -115,6 +116,35 @@ class TransferSerializer(serializers.Serializer):
             attrs['metadata'] = metadata
             return attrs
         
+        if method == 'iban':
+            iban = metadata.get('iban')
+            if not iban:
+                raise serializers.ValidationError({
+                    'metadata': "iban is required for IBAN transfers"
+                })
+            
+            # اعتبارسنجی شبا
+            is_valid, error_msg = validate_iranian_iban(iban)
+            if not is_valid:
+                raise serializers.ValidationError({
+                    'metadata': f"Invalid IBAN: {error_msg}"
+                })
+            
+            # مقدار شبا را normalize می‌کنیم (حذف فاصله و تبدیل به حروف بزرگ)
+            normalized_iban = iban.replace(' ', '').replace('-', '').upper()
+            metadata['iban'] = normalized_iban
+            attrs['metadata'] = metadata
+            
+            if amount is None:
+                raise serializers.ValidationError({'amount': 'Amount is required for IBAN transfers'})
+            
+            if amount < Decimal('10000'):
+                raise serializers.ValidationError({
+                    'amount': "Minimum transfer amount is 10,000 IRR"
+                })
+            
+            return attrs
+        
         if amount is None:
             raise serializers.ValidationError({'amount': 'This field is required'})
 
@@ -214,12 +244,14 @@ class TransferResponseSerializer(serializers.Serializer):
     """Serializer برای پاسخ انتقال"""
     transaction_id = serializers.CharField()
     amount = serializers.DecimalField(max_digits=15, decimal_places=2)
-    recipient = serializers.DictField()
+    recipient = serializers.DictField(required=False, allow_null=True)
     balance_after = serializers.DecimalField(max_digits=15, decimal_places=2)
     status = serializers.CharField()
     created_at = serializers.DateTimeField()
     method = serializers.CharField()
     metadata = serializers.JSONField()
+    iban = serializers.CharField(required=False, allow_null=True)
+    message = serializers.CharField(required=False, allow_null=True)
 
 
 class GatewayChargeSerializer(serializers.Serializer):
