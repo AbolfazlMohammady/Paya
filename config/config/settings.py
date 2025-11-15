@@ -55,7 +55,10 @@ MIDDLEWARE = [
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
-    'axes.middleware.AxesMiddleware',  
+    'axes.middleware.AxesMiddleware',
+    # Middleware برای لاگ امنیتی (طبق الزامات کاشف)
+    'users.core.middleware.RequestIDMiddleware',
+    'users.core.middleware.AuditLoggingMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
@@ -286,3 +289,91 @@ PAYMENT_GATEWAYS = {
         'VERIFY_SSL': os.environ.get('SEPEHR_VERIFY_SSL', 'True') == 'True',
     }
 }
+
+# Encryption Settings (طبق الزامات کاشف)
+# در production باید از environment variable استفاده شود
+ENCRYPTION_KEY = os.environ.get('ENCRYPTION_KEY', 'default-encryption-key-change-in-production-32-chars!!')
+
+# Logging Configuration (طبق الزامات کاشف)
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'verbose': {
+            'format': '{levelname} {asctime} {module} {process:d} {thread:d} {message}',
+            'style': '{',
+        },
+        'simple': {
+            'format': '{levelname} {message}',
+            'style': '{',
+        },
+        'audit': {
+            'format': '{asctime} | {levelname} | {module} | {message}',
+            'style': '{',
+            'datefmt': '%Y-%m-%d %H:%M:%S',
+        },
+    },
+    'filters': {
+        'require_debug_false': {
+            '()': 'django.utils.log.RequireDebugFalse',
+        },
+    },
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+            'formatter': 'verbose',
+        },
+        'file': {
+            'class': 'logging.handlers.RotatingFileHandler',
+            'filename': os.path.join(BASE_DIR, 'logs', 'django.log'),
+            'maxBytes': 1024 * 1024 * 10,  # 10 MB
+            'backupCount': 10,
+            'formatter': 'verbose',
+        },
+        'audit_file': {
+            'class': 'logging.handlers.RotatingFileHandler',
+            'filename': os.path.join(BASE_DIR, 'logs', 'audit.log'),
+            'maxBytes': 1024 * 1024 * 50,  # 50 MB
+            'backupCount': 30,
+            'formatter': 'audit',
+        },
+        'security_file': {
+            'class': 'logging.handlers.RotatingFileHandler',
+            'filename': os.path.join(BASE_DIR, 'logs', 'security.log'),
+            'maxBytes': 1024 * 1024 * 50,  # 50 MB
+            'backupCount': 30,
+            'formatter': 'audit',
+        },
+    },
+    'loggers': {
+        'django': {
+            'handlers': ['console', 'file'],
+            'level': os.getenv('DJANGO_LOG_LEVEL', 'INFO'),
+            'propagate': False,
+        },
+        'django.security': {
+            'handlers': ['security_file'],
+            'level': 'WARNING',
+            'propagate': False,
+        },
+        'audit': {
+            'handlers': ['audit_file'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+        'users.core.middleware': {
+            'handlers': ['audit_file'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+    },
+    'root': {
+        'handlers': ['console'],
+        'level': 'WARNING',
+    },
+}
+
+# ایجاد پوشه logs در صورت عدم وجود
+logs_dir = os.path.join(BASE_DIR, 'logs')
+if not os.path.exists(logs_dir):
+    os.makedirs(logs_dir)

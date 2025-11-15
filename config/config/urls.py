@@ -14,12 +14,12 @@ urlpatterns = [
     path("api/redoc/", SpectacularRedocView.as_view(url_name="schema"), name="redoc"),
     path('admin/', admin.site.urls),
 
-
-    # My app
-
+    # API های عمومی (برای کاربران عادی)
     path('api/core/', include('users.core.urls')),
     path('api/wallet/', include('wallet.urls')),
 
+    # API های مدیریتی (فقط برای admin و staff)
+    path('api/management/core/', include('users.core.management_urls')),
 ]
 if settings.DEBUG:
     urlpatterns += static(settings.STATIC_URL, document_root=settings.STATIC_ROOT)

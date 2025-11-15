@@ -75,7 +75,7 @@ def release_wallet_lock(wallet_id):
 
 
 @db_transaction.atomic
-def charge_wallet(wallet, amount, description='', payment_method=None, payment_id=None):
+def charge_wallet(wallet, amount, description='', payment_method=None, payment_id=None, request=None):
     """
     شارژ کیف پول
     """
@@ -89,6 +89,16 @@ def charge_wallet(wallet, amount, description='', payment_method=None, payment_i
         balance_before = wallet.balance
         balance_after = balance_before + amount
         
+        # استخراج IP و user_agent از request
+        ip_address = None
+        user_agent = None
+        request_id = None
+        if request:
+            from users.core.models import AuditLog
+            ip_address = AuditLog._get_client_ip(request)
+            user_agent = request.META.get('HTTP_USER_AGENT', '')
+            request_id = getattr(request, 'request_id', None)
+        
         # ایجاد تراکنش
         transaction = Transaction.objects.create(
             transaction_id=Transaction.generate_transaction_id(),
@@ -100,12 +110,33 @@ def charge_wallet(wallet, amount, description='', payment_method=None, payment_i
             description=description or 'شارژ کیف پول',
             status='completed',
             payment_method=payment_method,
-            payment_id=payment_id
+            payment_id=payment_id,
+            ip_address=ip_address,
+            user_agent=user_agent,
+            request_id=request_id
         )
         
         # به‌روزرسانی موجودی
         wallet.balance = balance_after
         wallet.save(update_fields=['balance', 'updated_at'])
+        
+        # ثبت لاگ امنیتی
+        if request:
+            from users.core.models import AuditLog
+            AuditLog.create_log(
+                event_type='transaction_create',
+                event_description=f'شارژ کیف پول به مبلغ {amount}',
+                user=wallet.user,
+                request=request,
+                result='success',
+                metadata={
+                    'transaction_id': transaction.transaction_id,
+                    'amount': str(amount),
+                    'balance_before': str(balance_before),
+                    'balance_after': str(balance_after),
+                },
+                related_object=transaction
+            )
         
         return transaction
     finally:
@@ -113,7 +144,7 @@ def charge_wallet(wallet, amount, description='', payment_method=None, payment_i
 
 
 @db_transaction.atomic
-def debit_wallet(wallet, amount, description='', reference_id=None):
+def debit_wallet(wallet, amount, description='', reference_id=None, request=None):
     """
     برداشت از کیف پول
     """
@@ -133,6 +164,16 @@ def debit_wallet(wallet, amount, description='', reference_id=None):
         balance_before = wallet.balance
         balance_after = balance_before - amount
         
+        # استخراج IP و user_agent از request
+        ip_address = None
+        user_agent = None
+        request_id = None
+        if request:
+            from users.core.models import AuditLog
+            ip_address = AuditLog._get_client_ip(request)
+            user_agent = request.META.get('HTTP_USER_AGENT', '')
+            request_id = getattr(request, 'request_id', None)
+        
         # ایجاد تراکنش
         transaction = Transaction.objects.create(
             transaction_id=Transaction.generate_transaction_id(),
@@ -143,12 +184,33 @@ def debit_wallet(wallet, amount, description='', reference_id=None):
             balance_after=balance_after,
             description=description or 'برداشت از کیف پول',
             status='completed',
-            reference_id=reference_id
+            reference_id=reference_id,
+            ip_address=ip_address,
+            user_agent=user_agent,
+            request_id=request_id
         )
         
         # به‌روزرسانی موجودی
         wallet.balance = balance_after
         wallet.save(update_fields=['balance', 'updated_at'])
+        
+        # ثبت لاگ امنیتی
+        if request:
+            from users.core.models import AuditLog
+            AuditLog.create_log(
+                event_type='transaction_create',
+                event_description=f'برداشت از کیف پول به مبلغ {amount}',
+                user=wallet.user,
+                request=request,
+                result='success',
+                metadata={
+                    'transaction_id': transaction.transaction_id,
+                    'amount': str(amount),
+                    'balance_before': str(balance_before),
+                    'balance_after': str(balance_after),
+                },
+                related_object=transaction
+            )
         
         return transaction
     finally:
@@ -156,7 +218,7 @@ def debit_wallet(wallet, amount, description='', reference_id=None):
 
 
 @db_transaction.atomic
-def transfer_money(sender_wallet, recipient_wallet, amount, description='', method=None, metadata=None):
+def transfer_money(sender_wallet, recipient_wallet, amount, description='', method=None, metadata=None, request=None):
     """
     انتقال وجه بین دو کیف پول
     """
@@ -194,6 +256,16 @@ def transfer_money(sender_wallet, recipient_wallet, amount, description='', meth
         recipient_balance_before = recipient_wallet.balance
         recipient_balance_after = recipient_balance_before + amount
         
+        # استخراج IP و user_agent از request
+        ip_address = None
+        user_agent = None
+        request_id = None
+        if request:
+            from users.core.models import AuditLog
+            ip_address = AuditLog._get_client_ip(request)
+            user_agent = request.META.get('HTTP_USER_AGENT', '')
+            request_id = getattr(request, 'request_id', None)
+        
         transfer_metadata = metadata.copy() if metadata else {}
         sender_metadata = transfer_metadata.copy()
         sender_metadata.setdefault('direction', 'outgoing')
@@ -217,7 +289,10 @@ def transfer_money(sender_wallet, recipient_wallet, amount, description='', meth
             status='completed',
             recipient_wallet=recipient_wallet,
             transfer_method=method,
-            metadata=sender_metadata
+            metadata=sender_metadata,
+            ip_address=ip_address,
+            user_agent=user_agent,
+            request_id=request_id
         )
         
         # ایجاد تراکنش دریافت‌کننده
@@ -232,7 +307,10 @@ def transfer_money(sender_wallet, recipient_wallet, amount, description='', meth
             status='completed',
             related_transaction=sender_transaction,
             transfer_method=method,
-            metadata=recipient_metadata
+            metadata=recipient_metadata,
+            ip_address=ip_address,
+            user_agent=user_agent,
+            request_id=request_id
         )
         
         # لینک کردن تراکنش‌ها
@@ -248,6 +326,28 @@ def transfer_money(sender_wallet, recipient_wallet, amount, description='', meth
         
         # به‌روزرسانی محدودیت‌های انتقال
         update_transfer_limits(sender_wallet, amount)
+        
+        # ثبت لاگ امنیتی
+        if request:
+            from users.core.models import AuditLog
+            AuditLog.create_log(
+                event_type='transaction_create',
+                event_description=f'انتقال وجه به مبلغ {amount} از {sender_wallet.user.phone} به {recipient_wallet.user.phone}',
+                user=sender_wallet.user,
+                request=request,
+                result='success',
+                metadata={
+                    'sender_transaction_id': sender_transaction.transaction_id,
+                    'recipient_transaction_id': recipient_transaction.transaction_id,
+                    'amount': str(amount),
+                    'method': method or 'unknown',
+                    'sender_balance_before': str(sender_balance_before),
+                    'sender_balance_after': str(sender_balance_after),
+                    'recipient_balance_before': str(recipient_balance_before),
+                    'recipient_balance_after': str(recipient_balance_after),
+                },
+                related_object=sender_transaction
+            )
         
         return sender_transaction, recipient_transaction
     finally:

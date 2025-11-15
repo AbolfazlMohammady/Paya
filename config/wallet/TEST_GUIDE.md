@@ -691,6 +691,29 @@ await transferMoney(
 
 - آدرس کیف پول باید دقیقاً 24 کاراکتر باشد و با `PAYA` شروع شود.
 
+
+
+### Audit Logs
+
+- `GET /api/management/core/audit-logs/` - لیست لاگ‌ها
+- `GET /api/management/core/audit-logs/{id}/` - جزئیات یک لاگ
+- `GET /api/management/core/audit-logs/statistics/` - آمار لاگ‌ها
+- `GET /api/management/core/audit-logs/recent_failures/` - لاگ‌های ناموفق اخیر
+- `GET /api/management/core/audit-logs/security_events/` - رویدادهای امنیتی
+
+### Query Parameters
+
+- `event_type`: فیلتر بر اساس نوع رویداد
+- `result`: فیلتر بر اساس نتیجه
+- `user_id`: فیلتر بر اساس کاربر
+- `user_phone`: فیلتر بر اساس شماره تلفن
+- `ip_address`: فیلتر بر اساس IP
+- `start_date`: تاریخ شروع
+- `end_date`: تاریخ پایان
+- `request_id`: فیلتر بر اساس request_id
+- `page`: شماره صفحه
+- `page_size`: تعداد در هر صفحه
+
 ---
 
 **تاریخ به‌روزرسانی**: 2025-11-13

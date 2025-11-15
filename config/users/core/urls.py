@@ -8,12 +8,10 @@ profile_get = ProfileViewSet.as_view({'get':'retrive',
                                       'patch':'update',
                                       })
 
-
-
 urlpatterns = [
     path('login/',LoginRegisterApiView.as_view()),
     path('verify/',VerifyApiView.as_view()),
     path('refresh/',TokenRefreshView.as_view(), name="token_refresh"),
     path('me/',profile_get,name="profile"),
-
+    # لاگ‌ها فقط در بخش management قابل دسترسی هستند
 ]

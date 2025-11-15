@@ -209,6 +209,24 @@ class Transaction(models.Model):
         blank=True,
         verbose_name=_('اطلاعات اضافی')
     )
+    # فیلدهای امنیتی برای لاگ (طبق الزامات کاشف)
+    ip_address = models.GenericIPAddressField(
+        null=True,
+        blank=True,
+        verbose_name=_('آدرس IP')
+    )
+    user_agent = models.TextField(
+        blank=True,
+        null=True,
+        verbose_name=_('User Agent')
+    )
+    request_id = models.CharField(
+        max_length=100,
+        blank=True,
+        null=True,
+        db_index=True,
+        verbose_name=_('شناسه درخواست')
+    )
     created_at = models.DateTimeField(auto_now_add=True, verbose_name=_('تاریخ ایجاد'))
     updated_at = models.DateTimeField(auto_now=True, verbose_name=_('تاریخ به‌روزرسانی'))
     
@@ -224,6 +242,8 @@ class Transaction(models.Model):
             models.Index(fields=['type']),
             models.Index(fields=['transfer_method']),
             models.Index(fields=['created_at']),
+            models.Index(fields=['ip_address', '-created_at']),
+            models.Index(fields=['request_id']),
         ]
     
     def __str__(self):

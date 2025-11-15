@@ -4,7 +4,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from django.utils import timezone
 from datetime import timedelta
 
-from users.core.models import User, OTP
+from users.core.models import User, OTP, AuditLog
 from users.core.utils.utils import _code
 from .serializer import ValidationPhoneSerializer,ValidationPhoneAndCodeSerializer
 
@@ -26,6 +26,15 @@ class LoginRegisterApiView(views.APIView):
             }
         )
 
+        # ثبت لاگ برای درخواست OTP
+        AuditLog.create_log(
+            event_type='auth_success' if created else 'other',
+            event_description=f'درخواست کد OTP برای شماره {phone}',
+            request=request,
+            result='success',
+            metadata={'action': 'otp_request'}
+        )
+
         return Response({'code': str(code)}, status=status.HTTP_200_OK)
 
 
@@ -42,14 +51,40 @@ class VerifyApiView(views.APIView):
         otp = OTP.objects.filter(phone=phone, code=code).first()
 
         if not otp:
+            # ثبت لاگ برای احراز هویت ناموفق
+            AuditLog.create_log(
+                event_type='auth_failed',
+                event_description=f'تلاش ناموفق احراز هویت - کد OTP نامعتبر برای شماره {phone}',
+                request=request,
+                result='failed',
+                metadata={'reason': 'invalid_code', 'phone': phone}
+            )
             return Response({'detail': 'There is no matching phone number or code.'}, status=status.HTTP_400_BAD_REQUEST)
 
         if not otp.is_valid():
+            # ثبت لاگ برای کد منقضی شده
+            AuditLog.create_log(
+                event_type='auth_failed',
+                event_description=f'تلاش ناموفق احراز هویت - کد OTP منقضی شده برای شماره {phone}',
+                request=request,
+                result='failed',
+                metadata={'reason': 'expired_code', 'phone': phone}
+            )
             return Response({'detail': 'The code is expired or incorrect.'}, status=status.HTTP_400_BAD_REQUEST)
 
         user, created = User.objects.get_or_create(phone=phone)
         refresh = RefreshToken.for_user(user)
         otp.delete()
+
+        # ثبت لاگ برای احراز هویت موفق
+        AuditLog.create_log(
+            event_type='auth_success',
+            event_description=f'احراز هویت موفق برای کاربر {phone}',
+            user=user,
+            request=request,
+            result='success',
+            metadata={'action': 'login', 'user_created': created}
+        )
 
         return Response({
             'refresh': str(refresh),

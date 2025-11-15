@@ -138,7 +138,8 @@ class WalletViewSet(viewsets.ViewSet):
                 amount=serializer.validated_data['amount'],
                 description=serializer.validated_data.get('description', ''),
                 payment_method=serializer.validated_data.get('payment_method'),
-                payment_id=serializer.validated_data.get('payment_id')
+                payment_id=serializer.validated_data.get('payment_id'),
+                request=request
             )
             
             response_data = {
@@ -185,7 +186,8 @@ class WalletViewSet(viewsets.ViewSet):
                 wallet=wallet,
                 amount=serializer.validated_data['amount'],
                 description=serializer.validated_data.get('description', ''),
-                reference_id=serializer.validated_data.get('reference_id')
+                reference_id=serializer.validated_data.get('reference_id'),
+                request=request
             )
             
             response_data = {
@@ -566,7 +568,8 @@ class WalletViewSet(viewsets.ViewSet):
                 amount=amount,
                 description=description,
                 method=method,
-                metadata=transfer_metadata
+                metadata=transfer_metadata,
+                request=request
             )
 
             if qr_instance:
