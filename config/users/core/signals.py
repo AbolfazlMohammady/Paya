@@ -15,13 +15,19 @@ def create_user_wallet(sender, instance: User, created: bool, **kwargs):
     if not created:
         return
 
-    Wallet.objects.get_or_create(
+    wallet, created = Wallet.objects.get_or_create(
         user=instance,
         defaults={
             'balance': Decimal('0'),
             'currency': 'IRR',
             'status': 'active',
+            'wallet_address': Wallet.generate_wallet_address(),
         }
     )
+    
+    # اگر کیف پول از قبل وجود داشت اما wallet_address نداشت، آن را اضافه می‌کنیم
+    if not created and not wallet.wallet_address:
+        wallet.wallet_address = Wallet.generate_wallet_address()
+        wallet.save(update_fields=['wallet_address'])
 
 

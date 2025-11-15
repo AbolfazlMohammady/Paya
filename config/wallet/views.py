@@ -12,7 +12,7 @@ import qrcode
 from qrcode.constants import ERROR_CORRECT_M
 from PIL import Image
 
-from .models import Wallet, Transaction, PaymentRequest, WalletQRCode
+from .models import Wallet, Transaction, PaymentRequest, WalletQRCode, PaymentLink, SpecialCode
 from .serializers import (
     WalletSerializer, WalletCreateSerializer,
     ChargeSerializer, DebitSerializer, TransferSerializer,
@@ -21,10 +21,11 @@ from .serializers import (
     DebitResponseSerializer, TransferResponseSerializer,
     GatewayChargeSerializer, GatewayChargeResponseSerializer,
     QRGenerateSerializer, QRGenerateResponseSerializer,
-    QRPayloadSerializer, QRInfoSerializer
+    QRPayloadSerializer, QRInfoSerializer,
+    LinkGenerateSerializer, LinkGenerateResponseSerializer
 )
 from .utils import (
-    charge_wallet, debit_wallet, transfer_money, transfer_to_iban,
+    charge_wallet, debit_wallet, transfer_money,
     MIN_TRANSFER_AMOUNT
 )
 from .payment_gateway import PaymentGatewayService
@@ -56,12 +57,14 @@ class WalletViewSet(viewsets.ViewSet):
         
         currency = serializer.validated_data.get('currency', 'IRR')
         
-        # ایجاد کیف پول
+        # ایجاد کیف پول با آدرس 24 رقمی
+        wallet_address = Wallet.generate_wallet_address()
         wallet = Wallet.objects.create(
             user=request.user,
             currency=currency,
             balance=Decimal('0'),
-            status='active'
+            status='active',
+            wallet_address=wallet_address
         )
         
         response_serializer = WalletSerializer(wallet)
@@ -232,7 +235,6 @@ class WalletViewSet(viewsets.ViewSet):
         method = serializer.validated_data.get('method', 'phone')
         metadata = serializer.validated_data.get('metadata', {})
         recipient_phone = serializer.validated_data.get('recipient_phone')
-        recipient_wallet_id = serializer.validated_data.get('recipient_wallet_id')
         amount = serializer.validated_data['amount']
         description = serializer.validated_data.get('description', '')
         
@@ -302,57 +304,187 @@ class WalletViewSet(viewsets.ViewSet):
             metadata.setdefault('qr_owner_wallet_id', recipient_wallet.id)
             metadata.setdefault('qr_owner_user_id', recipient_wallet.user_id)
             metadata.setdefault('qr_fixed_amount', bool(qr_instance.amount is not None))
-        elif method == 'iban':
-            # انتقال با شبا (برداشت به حساب بانکی خارج از شبکه)
-            iban = metadata.get('iban')
-            if not iban:
+        elif method == 'wallet_address':
+            # انتقال با آدرس کیف پول (24 رقمی)
+            wallet_address = metadata.get('wallet_address')
+            if not wallet_address:
                 return Response(
-                    {'detail': 'IBAN is required in metadata'},
+                    {'detail': 'wallet_address is required in metadata'},
                     status=status.HTTP_400_BAD_REQUEST
                 )
             
-            # استفاده از تابع مخصوص انتقال به شبا
-            try:
-                transaction = transfer_to_iban(
-                    sender_wallet=sender_wallet,
-                    iban=iban,
-                    amount=amount,
-                    description=description or f'برداشت به شبا {iban[-4:]}',
-                    metadata=metadata
-                )
-                
-                response_data = {
-                    'transaction_id': transaction.transaction_id,
-                    'amount': transaction.amount,
-                    'recipient': None,  # برای IBAN recipient نداریم
-                    'iban': iban[-4:],  # فقط 4 رقم آخر برای نمایش
-                    'balance_after': transaction.balance_after,  # موجودی کم شده
-                    'status': transaction.status,  # 'completed' - انتقال فوری انجام شده
-                    'created_at': transaction.created_at,
-                    'method': transaction.transfer_method,
-                    'metadata': transaction.metadata
-                }
-                response_serializer = TransferResponseSerializer(response_data)
-                return Response(response_serializer.data, status=status.HTTP_200_OK)  # 200 OK برای تراکنش completed
-            except ValueError as e:
+            # نرمال‌سازی آدرس (حذف فاصله و تبدیل به حروف بزرگ)
+            wallet_address = wallet_address.replace(' ', '').replace('-', '').upper()
+            
+            if len(wallet_address) != 24:
                 return Response(
-                    {'detail': str(e)},
+                    {'detail': 'Wallet address must be exactly 24 characters'},
                     status=status.HTTP_400_BAD_REQUEST
                 )
-            except Exception as e:
+            
+            if not wallet_address.startswith('PAYA'):
                 return Response(
-                    {'detail': str(e)},
-                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                    {'detail': 'Wallet address must start with PAYA'},
+                    status=status.HTTP_400_BAD_REQUEST
                 )
-        else:
-            if recipient_wallet_id:
-                if sender_wallet.id == recipient_wallet_id:
-                    return Response(
-                        {'detail': 'Cannot transfer to your own wallet'},
-                        status=status.HTTP_400_BAD_REQUEST
-                    )
+            
+            try:
+                recipient_wallet = Wallet.objects.select_related('user').get(wallet_address=wallet_address)
+                recipient_user = recipient_wallet.user
+            except Wallet.DoesNotExist:
+                return Response(
+                    {'detail': 'Recipient wallet not found'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+            
+            if sender_wallet.id == recipient_wallet.id:
+                return Response(
+                    {'detail': 'Cannot transfer to your own wallet'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            if recipient_wallet.status != 'active':
+                return Response(
+                    {'detail': 'Recipient wallet is not active'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            metadata = dict(metadata or {})
+            metadata.setdefault('wallet_address', wallet_address)
+        elif method == 'special_code':
+            # انتقال با کد اختصاصی (برای رانندگان)
+            special_code = metadata.get('special_code')
+            if not special_code:
+                return Response(
+                    {'detail': 'special_code is required in metadata'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # نرمال‌سازی کد (حذف فاصله)
+            special_code = special_code.replace(' ', '').replace('-', '').strip()
+            
+            try:
+                special_code_obj = SpecialCode.objects.select_related('user', 'user__wallet').get(
+                    code=special_code,
+                    is_active=True
+                )
+            except SpecialCode.DoesNotExist:
+                return Response(
+                    {'detail': 'Special code not found or inactive'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+            
+            # یافتن کیف پول دریافت‌کننده (راننده)
+            recipient_user = special_code_obj.user
+            try:
+                recipient_wallet = recipient_user.wallet
+            except Wallet.DoesNotExist:
+                return Response(
+                    {'detail': 'Recipient wallet not found'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+            
+            # بررسی اینکه کاربر به خودش پول نزند
+            if sender_wallet.id == recipient_wallet.id:
+                return Response(
+                    {'detail': 'Cannot transfer to your own wallet'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            if recipient_wallet.status != 'active':
+                return Response(
+                    {'detail': 'Recipient wallet is not active'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            metadata = dict(metadata or {})
+            metadata.setdefault('special_code', special_code)
+            metadata.setdefault('driver_user_id', recipient_user.id)
+            metadata.setdefault('driver_wallet_id', recipient_wallet.id)
+        elif method == 'link':
+            # انتقال با لینک پرداخت
+            payment_link_id = metadata.get('payment_link_id') or metadata.get('link_id')
+            if not payment_link_id:
+                return Response(
+                    {'detail': 'payment_link_id is required in metadata'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            try:
+                payment_link = PaymentLink.objects.select_related('wallet', 'wallet__user').get(link_id=payment_link_id)
+            except PaymentLink.DoesNotExist:
+                return Response(
+                    {'detail': 'Payment link not found'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+            
+            # بررسی انقضا
+            if payment_link.is_expired():
+                if payment_link.status != 'expired':
+                    payment_link.status = 'expired'
+                    payment_link.save(update_fields=['status', 'updated_at'])
+                return Response(
+                    {'detail': 'Payment link is expired'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # بررسی استفاده شده
+            if payment_link.status == 'used':
+                return Response(
+                    {'detail': 'Payment link has already been used'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            if payment_link.status != 'active':
+                return Response(
+                    {'detail': 'Payment link is not active'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # یافتن کیف پول دریافت‌کننده (صاحب لینک)
+            recipient_wallet = payment_link.wallet
+            recipient_user = recipient_wallet.user
+            
+            # بررسی اینکه کاربر به خودش پول نزند
+            if sender_wallet.id == recipient_wallet.id:
+                return Response(
+                    {'detail': 'Cannot transfer to your own wallet'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            if recipient_wallet.status != 'active':
+                return Response(
+                    {'detail': 'Recipient wallet is not active'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # استفاده از مبلغ لینک (اگر amount ارسال نشده باشد)
+            if amount is None:
+                amount = payment_link.amount
+            elif amount != payment_link.amount:
+                return Response(
+                    {'detail': f'Amount must be exactly {payment_link.amount} as specified in the payment link'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            metadata = dict(metadata or {})
+            metadata.setdefault('payment_link_id', payment_link_id)
+            metadata.setdefault('link_owner_wallet_id', recipient_wallet.id)
+            metadata.setdefault('link_owner_user_id', recipient_user.id)
+        elif method == 'nfc':
+            # انتقال با NFC
+            # NFC data می‌تواند wallet_address یا phone باشد
+            nfc_data = metadata.get('nfc_data') or metadata.get('nfc_token') or metadata.get('wallet_address')
+            if not nfc_data:
+                return Response(
+                    {'detail': 'nfc_data or wallet_address is required in metadata'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # اگر wallet_address است، مستقیماً استفاده می‌کنیم
+            if nfc_data.startswith('PAYA') and len(nfc_data) == 24:
                 try:
-                    recipient_wallet = Wallet.objects.select_related('user').get(id=recipient_wallet_id)
+                    recipient_wallet = Wallet.objects.select_related('user').get(wallet_address=nfc_data.upper())
                     recipient_user = recipient_wallet.user
                 except Wallet.DoesNotExist:
                     return Response(
@@ -360,30 +492,62 @@ class WalletViewSet(viewsets.ViewSet):
                         status=status.HTTP_404_NOT_FOUND
                     )
             else:
-                # بررسی اینکه کاربر به خودش پول نزند
-                if recipient_phone and str(request.user.phone) == recipient_phone:
-                    return Response(
-                        {'detail': 'Cannot transfer to yourself'},
-                        status=status.HTTP_400_BAD_REQUEST
-                    )
-                
-                # یافتن کاربر دریافت‌کننده
+                # اگر phone است، از phone استفاده می‌کنیم
                 try:
-                    recipient_user = User.objects.get(phone=recipient_phone)
+                    recipient_user = User.objects.get(phone=nfc_data)
+                    recipient_wallet = recipient_user.wallet
                 except User.DoesNotExist:
                     return Response(
                         {'detail': 'Recipient user not found'},
                         status=status.HTTP_404_NOT_FOUND
                     )
-                
-                # یافتن کیف پول دریافت‌کننده
-                try:
-                    recipient_wallet = recipient_user.wallet
                 except Wallet.DoesNotExist:
                     return Response(
                         {'detail': 'Recipient wallet not found'},
                         status=status.HTTP_404_NOT_FOUND
                     )
+            
+            # بررسی اینکه کاربر به خودش پول نزند
+            if sender_wallet.id == recipient_wallet.id:
+                return Response(
+                    {'detail': 'Cannot transfer to your own wallet'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            if recipient_wallet.status != 'active':
+                return Response(
+                    {'detail': 'Recipient wallet is not active'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            metadata = dict(metadata or {})
+            metadata.setdefault('nfc_data', nfc_data)
+        else:
+            # روش‌های phone و contact
+            # بررسی اینکه کاربر به خودش پول نزند
+            if recipient_phone and str(request.user.phone) == recipient_phone:
+                return Response(
+                    {'detail': 'Cannot transfer to yourself'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # یافتن کاربر دریافت‌کننده
+            try:
+                recipient_user = User.objects.get(phone=recipient_phone)
+            except User.DoesNotExist:
+                return Response(
+                    {'detail': 'Recipient user not found'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+            
+            # یافتن کیف پول دریافت‌کننده
+            try:
+                recipient_wallet = recipient_user.wallet
+            except Wallet.DoesNotExist:
+                return Response(
+                    {'detail': 'Recipient wallet not found'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
 
             if recipient_wallet.status != 'active':
                 return Response(
@@ -411,6 +575,23 @@ class WalletViewSet(viewsets.ViewSet):
                     'used_by_user_id': request.user.id,
                     'amount': str(amount)
                 })
+            
+            # اگر از لینک پرداخت استفاده شده، آن را علامت‌گذاری می‌کنیم
+            if method == 'link':
+                payment_link_id = transfer_metadata.get('payment_link_id')
+                if payment_link_id:
+                    try:
+                        payment_link = PaymentLink.objects.get(link_id=payment_link_id)
+                        payment_link.mark_used(
+                            used_by_wallet=sender_wallet,
+                            usage_metadata={
+                                'used_by_user_id': request.user.id,
+                                'amount': str(amount),
+                                'transaction_id': sender_transaction.transaction_id
+                            }
+                        )
+                    except PaymentLink.DoesNotExist:
+                        pass  # لینک پیدا نشد، اما تراکنش انجام شده است
             
             response_data = {
                 'transaction_id': sender_transaction.transaction_id,
@@ -806,6 +987,165 @@ class WalletViewSet(viewsets.ViewSet):
         response['Cache-Control'] = 'max-age=300'
         response['X-QR-Status'] = qr.status
         return response
+
+    @action(detail=False, methods=['get'], url_path='special-code/me')
+    def get_special_code(self, request):
+        """
+        دریافت کد اختصاصی کاربر
+        GET /api/wallet/special-code/me/
+        """
+        try:
+            wallet = request.user.wallet
+        except Wallet.DoesNotExist:
+            return Response(
+                {'detail': 'Wallet not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        try:
+            special_code = request.user.special_code
+            if not special_code.is_active:
+                return Response(
+                    {
+                        'code': special_code.code,
+                        'is_active': False,
+                        'message': 'کد اختصاصی شما غیرفعال است'
+                    },
+                    status=status.HTTP_200_OK
+                )
+            
+            return Response({
+                'code': special_code.code,
+                'is_active': special_code.is_active,
+                'created_at': special_code.created_at,
+                'updated_at': special_code.updated_at
+            }, status=status.HTTP_200_OK)
+        except SpecialCode.DoesNotExist:
+            return Response(
+                {'detail': 'Special code not found. Use POST /api/wallet/special-code/generate/ to create one.'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+    @action(detail=False, methods=['post'], url_path='special-code/generate')
+    def generate_special_code(self, request):
+        """
+        تولید یا به‌روزرسانی کد اختصاصی
+        POST /api/wallet/special-code/generate/
+        
+        Body (اختیاری):
+        {
+          "code": "12345"  // اگر ارسال نشود، کد به صورت خودکار تولید می‌شود
+        }
+        """
+        try:
+            wallet = request.user.wallet
+        except Wallet.DoesNotExist:
+            return Response(
+                {'detail': 'Wallet not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        if wallet.status != 'active':
+            return Response(
+                {'detail': 'Wallet is not active'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # دریافت کد از درخواست (اختیاری)
+        custom_code = request.data.get('code')
+        
+        # اعتبارسنجی کد سفارشی (اگر ارسال شده باشد)
+        if custom_code:
+            custom_code = custom_code.replace(' ', '').replace('-', '').strip()
+            if not custom_code.isdigit():
+                return Response(
+                    {'detail': 'Special code must contain only digits'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            if len(custom_code) < 4 or len(custom_code) > 10:
+                return Response(
+                    {'detail': 'Special code must be between 4 and 10 digits'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            # بررسی یکتایی
+            if SpecialCode.objects.filter(code=custom_code).exclude(user=request.user).exists():
+                return Response(
+                    {'detail': 'This code is already taken by another user'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        
+        try:
+            # ایجاد یا به‌روزرسانی کد
+            special_code = SpecialCode.create_for_user(
+                user=request.user,
+                code=custom_code if custom_code else None
+            )
+            
+            return Response({
+                'code': special_code.code,
+                'is_active': special_code.is_active,
+                'created_at': special_code.created_at,
+                'updated_at': special_code.updated_at,
+                'message': 'کد اختصاصی با موفقیت ایجاد شد'
+            }, status=status.HTTP_201_CREATED)
+        except Exception as e:
+            return Response(
+                {'detail': str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    @action(detail=False, methods=['post'], url_path='link/generate')
+    def generate_link(self, request):
+        """
+        ایجاد لینک پرداخت
+        POST /api/wallet/link/generate/
+        """
+        try:
+            wallet = request.user.wallet
+        except Wallet.DoesNotExist:
+            return Response(
+                {'detail': 'Wallet not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        if wallet.status != 'active':
+            return Response(
+                {'detail': 'Wallet is not active'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        serializer = LinkGenerateSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        data = serializer.validated_data
+        amount = data.get('amount')
+        description = data.get('description', '')
+        expires_in = data.get('expires_in', 3600)  # پیش‌فرض 1 ساعت
+        metadata = data.get('metadata', {})
+
+        # ایجاد لینک پرداخت
+        payment_link = PaymentLink.create_link(
+            wallet=wallet,
+            amount=amount,
+            description=description,
+            expires_in=expires_in,
+            metadata=metadata
+        )
+
+        # لینک اختصاصی (فقط شناسه - برای استفاده در اپلیکیشن)
+        # اپلیکیشن می‌تواند از این شناسه برای ساخت deeplink استفاده کند
+        response_data = {
+            'link_id': payment_link.link_id,
+            'link': payment_link.link_id,  # لینک اختصاصی (مثل: pl_ECF4895E7BB8)
+            'amount': payment_link.amount,
+            'description': payment_link.description,
+            'expires_at': payment_link.expires_at,
+            'status': payment_link.status
+        }
+
+        response_serializer = LinkGenerateResponseSerializer(response_data)
+        return Response(response_serializer.data, status=status.HTTP_201_CREATED)
 
 
 class TransactionViewSet(viewsets.ViewSet):
