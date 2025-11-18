@@ -673,6 +673,201 @@ await transferMoney(
 
 ---
 
+## 📊 گزارش تراکنش‌ها (Transaction Report)
+
+این endpoint برای نمایش گزارش کامل تراکنش‌ها در اپلیکیشن موبایل استفاده می‌شود. شامل خلاصه کارت‌ها، نمودار ماهانه و لیست تراکنش‌ها است.
+
+### دریافت گزارش تراکنش‌ها
+
+```bash
+GET /api/wallet/report/
+Authorization: Bearer <access_token>
+```
+
+### Query Parameters
+
+| پارامتر | نوع | پیش‌فرض | توضیح |
+|---------|-----|---------|-------|
+| `period` | string | `week` | بازه زمانی برای نمودار: `week` (هفته‌ای) یا `month` (ماهانه) |
+| `weeks` | integer | `6` | تعداد هفته‌ها برای نمایش (زمانی که `period=week`) |
+| `months` | integer | `6` | تعداد ماه‌ها برای نمایش (زمانی که `period=month`) |
+| `start_date` | string | - | تاریخ شروع (ISO format: `YYYY-MM-DD`) |
+| `end_date` | string | - | تاریخ پایان (ISO format: `YYYY-MM-DD`) |
+| `transaction_type` | string | `all` | نوع تراکنش: `all`, `charge`, `debit`, `transfer_in`, `transfer_out` |
+| `search` | string | - | جستجو در توضیحات، transaction_id یا reference_id |
+| `page` | integer | `1` | شماره صفحه |
+| `page_size` | integer | `20` | تعداد در هر صفحه |
+
+### مثال‌های استفاده
+
+#### 1. گزارش پیش‌فرض (6 هفته گذشته)
+
+```bash
+GET http://localhost:8000/api/wallet/report/
+Authorization: Bearer <access_token>
+```
+
+**پاسخ نمونه:**
+
+```json
+{
+  "summary": {
+    "total_payments": "1800000.00",
+    "total_receipts": "800000.00",
+    "formatted_total_payments": "۱,۸۰۰,۰۰۰ تومان",
+    "formatted_total_receipts": "۸۰۰,۰۰۰ تومان"
+  },
+  "chart_data": [
+    {
+      "period": "هفته ۱",
+      "payments": "500000.00",
+      "receipts": "100000.00",
+      "date": "2025-01-06"
+    },
+    {
+      "period": "هفته ۲",
+      "payments": "300000.00",
+      "receipts": "200000.00",
+      "date": "2025-01-13"
+    },
+    {
+      "period": "هفته ۳",
+      "payments": "400000.00",
+      "receipts": "150000.00",
+      "date": "2025-01-20"
+    },
+    {
+      "period": "هفته ۴",
+      "payments": "200000.00",
+      "receipts": "180000.00",
+      "date": "2025-01-27"
+    },
+    {
+      "period": "هفته ۵",
+      "payments": "250000.00",
+      "receipts": "120000.00",
+      "date": "2025-02-03"
+    },
+    {
+      "period": "هفته ۶",
+      "payments": "150000.00",
+      "receipts": "50000.00",
+      "date": "2025-02-10"
+    }
+  ],
+  "transactions": [
+    {
+      "id": 1,
+      "transaction_id": "txn_abc123def456",
+      "type": "charge",
+      "type_display": "شارژ",
+      "amount": "5000000.00",
+      "balance_before": "0.00",
+      "balance_after": "5000000.00",
+      "description": "شارژ کیف پول",
+      "status": "completed",
+      "status_display": "تکمیل شده",
+      "created_at": "2025-01-15T10:30:00Z",
+      "metadata": {},
+      "recipient_info": null
+    },
+    {
+      "id": 2,
+      "transaction_id": "txn_xyz789ghi012",
+      "type": "transfer_out",
+      "type_display": "ارسال انتقال",
+      "amount": "250000.00",
+      "balance_before": "5000000.00",
+      "balance_after": "4750000.00",
+      "description": "انتقال به احمدی",
+      "status": "completed",
+      "status_display": "تکمیل شده",
+      "transfer_method": "phone",
+      "created_at": "2025-01-15T11:00:00Z",
+      "metadata": {},
+      "recipient_info": {
+        "phone": "+989121234567",
+        "fullname": "احمدی"
+      }
+    }
+  ],
+  "total_transactions": 25,
+  "has_more": true
+}
+```
+
+#### 2. گزارش ماهانه (6 ماه گذشته)
+
+```bash
+GET http://localhost:8000/api/wallet/report/?period=month&months=6
+Authorization: Bearer <access_token>
+```
+
+#### 3. گزارش با فیلتر نوع تراکنش
+
+```bash
+GET http://localhost:8000/api/wallet/report/?transaction_type=transfer_out
+Authorization: Bearer <access_token>
+```
+
+#### 4. گزارش با جستجو
+
+```bash
+GET http://localhost:8000/api/wallet/report/  
+Authorization: Bearer <access_token>
+```
+
+این endpoint در توضیحات، transaction_id و reference_id جستجو می‌کند.
+
+#### 5. گزارش با بازه زمانی مشخص
+
+```bash
+GET http://localhost:8000/api/wallet/report/?start_date=2025-01-01&end_date=2025-01-31
+Authorization: Bearer <access_token>
+```
+
+#### 6. گزارش با pagination
+
+```bash
+GET http://localhost:8000/api/wallet/report/?page=2&page_size=10
+Authorization: Bearer <access_token>
+```
+
+### ساختار پاسخ
+
+- **summary**: خلاصه کارت‌ها
+  - `total_payments`: کل پرداختی (transfer_out + debit)
+  - `total_receipts`: کل دریافتی (transfer_in + charge + refund)
+  - `formatted_total_payments`: کل پرداختی فرمت شده
+  - `formatted_total_receipts`: کل دریافتی فرمت شده
+
+- **chart_data**: داده‌های نمودار
+  - `period`: بازه زمانی (مثل "هفته ۱" یا "1403/05")
+  - `payments`: مجموع پرداخت‌ها در این بازه
+  - `receipts`: مجموع دریافت‌ها در این بازه
+  - `date`: تاریخ شروع بازه
+
+- **transactions**: لیست تراکنش‌ها (با pagination)
+  - هر تراکنش شامل تمام اطلاعات از TransactionSerializer است
+
+- **total_transactions**: تعداد کل تراکنش‌ها (بدون pagination)
+
+- **has_more**: آیا صفحه بعدی وجود دارد؟
+
+### نکات مهم برای اپلیکیشن Flutter
+
+1. **نمایش خلاصه:** از `summary.total_payments` و `summary.total_receipts` برای نمایش کارت‌های خلاصه استفاده کنید.
+
+2. **نمودار خطی:** از `chart_data` برای رسم نمودار خطی استفاده کنید. داده‌ها به ترتیب زمانی مرتب شده‌اند.
+
+3. **لیست تراکنش‌ها:** از `transactions` برای نمایش لیست استفاده کنید. برای pagination، از `has_more` برای نمایش دکمه "مشاهده بیشتر" استفاده کنید.
+
+4. **فیلترها:** کاربر می‌تواند فیلترهای مختلف را اعمال کند (نوع تراکنش، بازه زمانی، جستجو).
+
+5. **نمایش مبالغ:** از فیلدهای `formatted_total_payments` و `formatted_total_receipts` برای نمایش مبالغ به فارسی استفاده کنید.
+
+---
+
 ## 🐛 عیب‌یابی
 
 ### خطا: "Wallet not found"
@@ -716,5 +911,5 @@ await transferMoney(
 
 ---
 
-**تاریخ به‌روزرسانی**: 2025-11-13
+**تاریخ به‌روزرسانی**: 2025-01-15
 **نگهدارنده**: Abolfazl Mohammadi

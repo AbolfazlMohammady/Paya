@@ -17,6 +17,7 @@ wallet_qr_image = WalletViewSet.as_view({'get': 'qr_image'})
 wallet_special_code_me = WalletViewSet.as_view({'get': 'get_special_code'})
 wallet_special_code_generate = WalletViewSet.as_view({'post': 'generate_special_code'})
 wallet_link_generate = WalletViewSet.as_view({'post': 'generate_link'})
+wallet_report = WalletViewSet.as_view({'get': 'report'})
 transaction_detail = TransactionViewSet.as_view({'get': 'retrieve'})
 
 urlpatterns = [
@@ -35,6 +36,7 @@ urlpatterns = [
     path('special-code/me/', wallet_special_code_me, name='wallet-special-code-me'),
     path('special-code/generate/', wallet_special_code_generate, name='wallet-special-code-generate'),
     path('link/generate/', wallet_link_generate, name='wallet-link-generate'),
+    path('report/', wallet_report, name='wallet-report'),
     # Payment callback and status
     path('payment-callback/', PaymentCallbackView.as_view(), name='payment-callback'),
     path('payment-status/<str:request_id>/', PaymentStatusView.as_view(), name='payment-status'),

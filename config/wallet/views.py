@@ -4,7 +4,8 @@ from rest_framework.decorators import action
 from django.utils import timezone
 from django.db import transaction as db_transaction
 from django.core.paginator import Paginator
-from django.db.models import Q
+from django.db.models import Q, Sum, Count
+from django.db.models.functions import TruncWeek, TruncMonth, TruncDate
 from django.http import HttpResponse
 from decimal import Decimal
 from io import BytesIO
@@ -22,7 +23,9 @@ from .serializers import (
     GatewayChargeSerializer, GatewayChargeResponseSerializer,
     QRGenerateSerializer, QRGenerateResponseSerializer,
     QRPayloadSerializer, QRInfoSerializer,
-    LinkGenerateSerializer, LinkGenerateResponseSerializer
+    LinkGenerateSerializer, LinkGenerateResponseSerializer,
+    TransactionReportSerializer, TransactionReportSummarySerializer,
+    TransactionReportChartDataSerializer
 )
 from .utils import (
     charge_wallet, debit_wallet, transfer_money,
@@ -1149,6 +1152,161 @@ class WalletViewSet(viewsets.ViewSet):
 
         response_serializer = LinkGenerateResponseSerializer(response_data)
         return Response(response_serializer.data, status=status.HTTP_201_CREATED)
+
+    @action(detail=False, methods=['get'], url_path='report')
+    def report(self, request):
+        """
+        دریافت گزارش کامل تراکنش‌ها
+        GET /api/wallet/report/
+        
+        Query Parameters:
+        - period: بازه زمانی ('week', 'month') - پیش‌فرض: 'week'
+        - weeks: تعداد هفته‌ها برای نمایش (برای period=week) - پیش‌فرض: 6
+        - months: تعداد ماه‌ها برای نمایش (برای period=month) - پیش‌فرض: 6
+        - start_date: تاریخ شروع (ISO format: YYYY-MM-DD)
+        - end_date: تاریخ پایان (ISO format: YYYY-MM-DD)
+        - transaction_type: نوع تراکنش ('all', 'charge', 'debit', 'transfer_in', 'transfer_out')
+        - search: جستجو در توضیحات یا transaction_id
+        - page: شماره صفحه - پیش‌فرض: 1
+        - page_size: تعداد در هر صفحه - پیش‌فرض: 20
+        """
+        try:
+            wallet = request.user.wallet
+        except Wallet.DoesNotExist:
+            return Response(
+                {'detail': 'Wallet not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # دریافت پارامترهای جستجو
+        period = request.query_params.get('period', 'week')  # 'week' یا 'month'
+        weeks = int(request.query_params.get('weeks', 6))
+        months = int(request.query_params.get('months', 6))
+        start_date_param = request.query_params.get('start_date')
+        end_date_param = request.query_params.get('end_date')
+        transaction_type = request.query_params.get('transaction_type', 'all')
+        search_query = request.query_params.get('search', '')
+        page = int(request.query_params.get('page', 1))
+        page_size = int(request.query_params.get('page_size', 20))
+        
+        # محاسبه بازه زمانی
+        now = timezone.now()
+        if start_date_param:
+            try:
+                start_date = timezone.datetime.fromisoformat(start_date_param.replace('Z', '+00:00'))
+            except:
+                start_date = now - timezone.timedelta(weeks=weeks)
+        else:
+            if period == 'week':
+                start_date = now - timezone.timedelta(weeks=weeks)
+            else:  # month
+                start_date = now - timezone.timedelta(days=months * 30)
+        
+        if end_date_param:
+            try:
+                end_date = timezone.datetime.fromisoformat(end_date_param.replace('Z', '+00:00'))
+            except:
+                end_date = now
+        else:
+            end_date = now
+        
+        # فیلتر تراکنش‌ها
+        queryset = Transaction.objects.filter(
+            wallet=wallet,
+            created_at__gte=start_date,
+            created_at__lte=end_date
+        )
+        
+        # فیلتر بر اساس نوع تراکنش
+        if transaction_type != 'all':
+            queryset = queryset.filter(type=transaction_type)
+        
+        # جستجو
+        if search_query:
+            queryset = queryset.filter(
+                Q(description__icontains=search_query) |
+                Q(transaction_id__icontains=search_query) |
+                Q(reference_id__icontains=search_query)
+            )
+        
+        # محاسبه خلاصه (کل پرداختی و کل دریافتی)
+        # پرداختی: transfer_out + debit
+        total_payments = queryset.filter(
+            type__in=['transfer_out', 'debit']
+        ).aggregate(total=Sum('amount'))['total'] or Decimal('0')
+        
+        # دریافتی: transfer_in + charge + refund
+        total_receipts = queryset.filter(
+            type__in=['transfer_in', 'charge', 'refund']
+        ).aggregate(total=Sum('amount'))['total'] or Decimal('0')
+        
+        # فرمت کردن مبالغ
+        def format_amount(amount):
+            return f"{amount:,.0f} تومان"
+        
+        summary_data = {
+            'total_payments': total_payments,
+            'total_receipts': total_receipts,
+            'formatted_total_payments': format_amount(total_payments),
+            'formatted_total_receipts': format_amount(total_receipts)
+        }
+        
+        # محاسبه داده‌های نمودار
+        chart_data = []
+        if period == 'week':
+            # گروه‌بندی بر اساس هفته
+            weekly_data = queryset.annotate(
+                week_start=TruncWeek('created_at')
+            ).values('week_start').annotate(
+                payments=Sum('amount', filter=Q(type__in=['transfer_out', 'debit'])),
+                receipts=Sum('amount', filter=Q(type__in=['transfer_in', 'charge', 'refund']))
+            ).order_by('week_start')
+            
+            week_num = 1
+            for item in weekly_data:
+                chart_data.append({
+                    'period': f"هفته {week_num}",
+                    'payments': item['payments'] or Decimal('0'),
+                    'receipts': item['receipts'] or Decimal('0'),
+                    'date': item['week_start'].date()
+                })
+                week_num += 1
+        else:  # month
+            # گروه‌بندی بر اساس ماه
+            monthly_data = queryset.annotate(
+                month_start=TruncMonth('created_at')
+            ).values('month_start').annotate(
+                payments=Sum('amount', filter=Q(type__in=['transfer_out', 'debit'])),
+                receipts=Sum('amount', filter=Q(type__in=['transfer_in', 'charge', 'refund']))
+            ).order_by('month_start')
+            
+            for item in monthly_data:
+                # فرمت تاریخ به صورت 1403/05
+                month_date = item['month_start']
+                chart_data.append({
+                    'period': f"{month_date.year}/{month_date.month:02d}",
+                    'payments': item['payments'] or Decimal('0'),
+                    'receipts': item['receipts'] or Decimal('0'),
+                    'date': month_date.date()
+                })
+        
+        # دریافت لیست تراکنش‌ها (با pagination)
+        paginator = Paginator(queryset.order_by('-created_at'), page_size)
+        page_obj = paginator.get_page(page)
+        
+        transactions_serializer = TransactionSerializer(page_obj.object_list, many=True)
+        
+        # آماده‌سازی پاسخ
+        report_data = {
+            'summary': summary_data,
+            'chart_data': chart_data,
+            'transactions': transactions_serializer.data,
+            'total_transactions': paginator.count,
+            'has_more': page_obj.has_next()
+        }
+        
+        serializer = TransactionReportSerializer(report_data)
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
 
 class TransactionViewSet(viewsets.ViewSet):

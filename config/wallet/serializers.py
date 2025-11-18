@@ -402,3 +402,28 @@ class LinkGenerateResponseSerializer(serializers.Serializer):
     expires_at = serializers.DateTimeField()
     status = serializers.CharField()
 
+
+class TransactionReportSummarySerializer(serializers.Serializer):
+    """Serializer برای خلاصه گزارش تراکنش‌ها"""
+    total_payments = serializers.DecimalField(max_digits=15, decimal_places=2)
+    total_receipts = serializers.DecimalField(max_digits=15, decimal_places=2)
+    formatted_total_payments = serializers.CharField()
+    formatted_total_receipts = serializers.CharField()
+
+
+class TransactionReportChartDataSerializer(serializers.Serializer):
+    """Serializer برای داده‌های نمودار گزارش تراکنش‌ها"""
+    period = serializers.CharField()  # مثل "هفته ۱" یا "1403/05"
+    payments = serializers.DecimalField(max_digits=15, decimal_places=2)
+    receipts = serializers.DecimalField(max_digits=15, decimal_places=2)
+    date = serializers.DateField()
+
+
+class TransactionReportSerializer(serializers.Serializer):
+    """Serializer برای گزارش کامل تراکنش‌ها"""
+    summary = TransactionReportSummarySerializer()
+    chart_data = TransactionReportChartDataSerializer(many=True)
+    transactions = serializers.ListField(child=serializers.DictField(), required=False)
+    total_transactions = serializers.IntegerField()
+    has_more = serializers.BooleanField()
+
