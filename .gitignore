@@ -6,6 +6,9 @@ __pycache__/
 # data
 db.sqlite3
 # C extensions
+github_webhook.py
+passenger_wsgi.py
+tmp/
 figma
 kashf
 *.so
