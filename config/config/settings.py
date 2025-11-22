@@ -265,10 +265,6 @@ CORS_ALLOW_METHODS = [
 # External services / API keys
 # RESEND_API_KEY = os.environ.get('RESEND_API_KEY', '')
 
-RESEND_API_KEY=os.environ.get('RESEND_API_KEY', 're_dUAfRuPj_KP9q36Sa2x9UGNXp263qAPMM')
-
-# Chat bot
-MAMMOUTH_API_KEY = os.getenv('MAMMOUTH_API_KEY')
 
 # Base URL for callbacks (used by درگاه‌ها نیز)
 BASE_URL = os.environ.get('BASE_URL', 'http://localhost:8000')
@@ -280,9 +276,9 @@ PAYMENT_GATEWAYS = {
         'ENABLED': os.environ.get('SEPEHR_ENABLED', 'True') == 'True',
         'MOCK_MODE': os.environ.get('SEPEHR_MOCK_MODE', 'False') == 'True',  # حالت Mock برای تست/توسعه
         'TERMINAL_ID': os.environ.get('SEPEHR_TERMINAL_ID', '98743989'),
-        'TOKEN_URL': os.environ.get('SEPEHR_TOKEN_URL', 'https://sepehr.shaparak.ir/Rest/V1/PeymentApi/GetToken'),
-        'PAYMENT_URL': os.environ.get('SEPEHR_PAYMENT_URL', 'https://sepehr.shaparak.ir/Payment/Pay'),
-        'ADVICE_URL': os.environ.get('SEPEHR_ADVICE_URL', 'https://sepehr.shaparak.ir/Rest/V1/PeymentApi/Advice'),
+        'TOKEN_URL': os.environ.get('SEPEHR_TOKEN_URL', 'https://sepehr.shaparak.ir:8081/V1/PeymentApi/GetToken'),
+        'PAYMENT_URL': os.environ.get('SEPEHR_PAYMENT_URL', 'https://sepehr.shaparak.ir:8080/Pay'),
+        'ADVICE_URL': os.environ.get('SEPEHR_ADVICE_URL', 'https://sepehr.shaparak.ir:8081/V1/PeymentApi/Advice'),
         'ROLLBACK_URL': os.environ.get('SEPEHR_ROLLBACK_URL', 'https://sepehr.shaparak.ir/Rest/V1/PeymentApi/Rollback'),
         'TIMEOUT': int(os.environ.get('SEPEHR_TIMEOUT', 10)),
         'DEFAULT_PAYLOAD': os.environ.get('SEPEHR_DEFAULT_PAYLOAD', ''),

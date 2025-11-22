@@ -76,6 +76,16 @@ Content-Type: application/json
 
 ### مرحله 4: شبیه‌سازی Callback (در حالت Mock)
 
+> **نکته مهم برای تست با درگاه واقعی**: اگر `SEPEHR_MOCK_MODE=False` باشد، باید درگاه واقعی به callback URL شما دسترسی داشته باشد. برای تست محلی، از ngrok استفاده کنید:
+> 
+> ```bash
+> ngrok http 8000
+> ```
+> 
+> سپس `BASE_URL` را در `.env` به URL ngrok تغییر دهید.
+> 
+> برای راهنمای کامل تست درگاه، به فایل `PAYMENT_GATEWAY_TEST_GUIDE.md` مراجعه کنید.
+
 ```bash
 POST http://localhost:8000/api/wallet/payment-callback/
 Content-Type: application/json

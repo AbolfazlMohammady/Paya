@@ -818,9 +818,23 @@ class WalletViewSet(viewsets.ViewSet):
         # محاسبه زمان انقضا (30 دقیقه)
         expires_at = timezone.now() + timezone.timedelta(minutes=30)
         
+        # استخراج اطلاعات لازم برای فرم POST
+        payment_extra = payment_result.get('extra') or {}
+        payment_form_url = payment_extra.get('payment_form_url') or payment_result.get('payment_url', '').split('?')[0]
+        access_token = payment_extra.get('access_token') or payment_result.get('authority')
+        terminal_id = payment_extra.get('terminal_id') or terminal_id_from_config
+        get_method = payment_extra.get('get_method', '1')  # طبق مستندات باید 1 باشد
+        
         response_data = {
             'request_id': payment_request.request_id,
-            'payment_url': payment_result.get('payment_url'),
+            'payment_url': payment_result.get('payment_url'),  # URL با query params (برای سازگاری)
+            'payment_form': {  # اطلاعات فرم POST (طبق مستندات درگاه سپهر)
+                'action_url': payment_form_url,
+                'terminal_id': terminal_id,
+                'token': access_token,
+                'get_method': get_method,  # باید 1 باشد
+                'method': 'POST'
+            },
             'authority': payment_result.get('authority'),
             'amount': amount,
             'gateway': resolved_gateway,

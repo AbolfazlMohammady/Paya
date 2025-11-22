@@ -70,8 +70,8 @@ class SepehrPaymentGateway:
         if not invoice_id:
             raise ValueError("Sepehr gateway requires invoice_id in metadata")
 
-        token_url = self.config.get('TOKEN_URL') or 'https://sepehr.shaparak.ir/Rest/V1/PeymentApi/GetToken'
-        payment_url = (self.config.get('PAYMENT_URL') or 'https://sepehr.shaparak.ir/Payment/Pay').rstrip('/')
+        token_url = self.config.get('TOKEN_URL') or 'https://sepehr.shaparak.ir:8081/V1/PeymentApi/GetToken'
+        payment_url = (self.config.get('PAYMENT_URL') or 'https://sepehr.shaparak.ir:8080/Pay').rstrip('/')
 
         request_body = {
             "TerminalID": terminal_id,
@@ -139,11 +139,14 @@ class SepehrPaymentGateway:
             access_token = result.get('Accesstoken') or result.get('AccessToken')
 
             if (status_value in self.STATUS_SUCCESS_VALUES or str(status_value) in self.STATUS_SUCCESS_VALUES) and access_token:
-                redirect_url = f"{payment_url}?token={access_token}&terminalId={terminal_id}"
+                # طبق مستندات درگاه سپهر، باید از فرم POST استفاده کنیم
+                # فرم باید شامل فیلدهای TerminalID، token و getMethod=1 باشد
+                # برای سازگاری، هم URL با query params و هم اطلاعات فرم POST را برمی‌گردانیم
+                redirect_url = f"{payment_url}?token={access_token}&TerminalID={terminal_id}&getMethod=1"
                 return PaymentResult(
                     success=True,
                     authority=access_token,
-                    payment_url=redirect_url,
+                    payment_url=redirect_url,  # برای سازگاری با کدهای قدیمی
                     gateway=self.name,
                     raw_response=result,
                     extra={
@@ -151,6 +154,9 @@ class SepehrPaymentGateway:
                         'invoice_id': invoice_id,
                         'payload': payload,
                         'token_url': token_url,
+                        'payment_form_url': payment_url,  # URL برای فرم POST (بدون query params)
+                        'access_token': access_token,  # توکن برای فرم
+                        'get_method': '1',  # فیلد getMethod باید 1 باشد
                     }
                 )
 
@@ -260,7 +266,7 @@ class SepehrPaymentGateway:
                 }
             )
 
-        advice_url = self.config.get('ADVICE_URL') or 'https://sepehr.shaparak.ir/Rest/V1/PeymentApi/Advice'
+        advice_url = self.config.get('ADVICE_URL') or 'https://sepehr.shaparak.ir:8081/V1/PeymentApi/Advice'
         timeout = self._get_timeout()
 
         request_body = {
@@ -322,6 +328,34 @@ class PaymentGatewayService:
         gateways_config = getattr(settings, 'PAYMENT_GATEWAYS', {})
         sepehr_config = gateways_config.get('sepehr', {})
         return SepehrPaymentGateway(name='sepehr', config=sepehr_config)
+
+    @staticmethod
+    def generate_payment_form_html(payment_url: str, terminal_id: str, token: str) -> str:
+        """
+        تولید فرم HTML برای هدایت کاربر به صفحه پرداخت درگاه سپهر
+        طبق مستندات درگاه، باید از فرم POST استفاده کنیم
+        """
+        return f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="UTF-8">
+            <title>در حال انتقال به درگاه پرداخت...</title>
+        </head>
+        <body>
+            <form method="post" action="{payment_url}" id="paymentForm">
+                <input type="text" name="TerminalID" value="{terminal_id}" />
+                <input type="text" name="token" value="{token}" />
+                <input name="getMethod" type="hidden" required="required" value="1">
+                <input type="submit" value="پرداخت" class="submit" />
+            </form>
+            <script>
+                // ارسال خودکار فرم
+                document.getElementById('paymentForm').submit();
+            </script>
+        </body>
+        </html>
+        """
 
     @classmethod
     def create_payment_request(

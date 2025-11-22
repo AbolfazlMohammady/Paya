@@ -18,9 +18,9 @@ PAYMENT_GATEWAY_DEFAULT=sepehr
 # تنظیمات درگاه سپهر
 SEPEHR_ENABLED=True
 SEPEHR_TERMINAL_ID=98743989
-SEPEHR_TOKEN_URL=https://sepehr.shaparak.ir/Rest/V1/PeymentApi/GetToken
-SEPEHR_PAYMENT_URL=https://sepehr.shaparak.ir/Payment/Pay
-SEPEHR_ADVICE_URL=https://sepehr.shaparak.ir/Rest/V1/PeymentApi/Advice
+SEPEHR_TOKEN_URL=https://sepehr.shaparak.ir:8081/V1/PeymentApi/GetToken
+SEPEHR_PAYMENT_URL=https://sepehr.shaparak.ir:8080/Pay
+SEPEHR_ADVICE_URL=https://sepehr.shaparak.ir:8081/V1/PeymentApi/Advice
 SEPEHR_ROLLBACK_URL=https://sepehr.shaparak.ir/Rest/V1/PeymentApi/Rollback
 SEPEHR_TIMEOUT=10
 SEPEHR_DEFAULT_PAYLOAD=
@@ -45,7 +45,14 @@ Endpoint: `POST /api/wallet/charge-gateway/`
 ```json
 {
   "request_id": "req_abcd1234",
-  "payment_url": "https://sepehr.shaparak.ir/Payment/Pay?token=...&terminalId=...",
+  "payment_url": "https://sepehr.shaparak.ir:8080/Pay?token=...&TerminalID=...&getMethod=1",
+  "payment_form": {
+    "action_url": "https://sepehr.shaparak.ir:8080/Pay",
+    "terminal_id": "98743989",
+    "token": "AccessTokenFromSepehr",
+    "get_method": "1",
+    "method": "POST"
+  },
   "authority": "AccessTokenFromSepehr",
   "amount": 100000,
   "gateway": "sepehr",

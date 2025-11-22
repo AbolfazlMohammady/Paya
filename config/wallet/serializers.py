@@ -322,6 +322,7 @@ class GatewayChargeResponseSerializer(serializers.Serializer):
     """Serializer برای پاسخ درخواست شارژ از درگاه"""
     request_id = serializers.CharField()
     payment_url = serializers.URLField()
+    payment_form = serializers.DictField(required=False)  # اطلاعات فرم POST
     authority = serializers.CharField()
     amount = serializers.DecimalField(max_digits=15, decimal_places=2)
     gateway = serializers.CharField()
